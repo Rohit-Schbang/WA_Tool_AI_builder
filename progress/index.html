@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WA AI Tool — Progress</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0a0e17;
+      --bg-2: #0f1523;
+      --panel: rgba(255,255,255,0.04);
+      --panel-hover: rgba(255,255,255,0.07);
+      --border: rgba(255,255,255,0.08);
+      --border-strong: rgba(255,255,255,0.14);
+      --text: #eef2fb;
+      --muted: #93a0bd;
+      --faint: #64708c;
+      --green: #34d399;
+      --amber: #fbbf24;
+      --blue: #60a5fa;
+      --violet: #a78bfa;
+      --gray: #475069;
+      --track: rgba(255,255,255,0.06);
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background:
+        radial-gradient(1200px 600px at 15% -10%, rgba(96,165,250,0.14), transparent 60%),
+        radial-gradient(1000px 500px at 100% 0%, rgba(167,139,250,0.12), transparent 55%),
+        var(--bg);
+      color: var(--text);
+      font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      line-height: 1.55;
+      -webkit-font-smoothing: antialiased;
+      min-height: 100vh;
+    }
+    .wrap { max-width: 1120px; margin: 0 auto; padding: 44px 24px 90px; }
+
+    /* Hero */
+    .hero {
+      display: flex; align-items: center; gap: 20px;
+      padding: 30px 32px; border-radius: 22px; position: relative; overflow: hidden;
+      background: linear-gradient(135deg, rgba(96,165,250,0.16), rgba(167,139,250,0.10));
+      border: 1px solid var(--border-strong);
+      box-shadow: 0 20px 60px -20px rgba(0,0,0,0.6);
+    }
+    .hero::after {
+      content: ""; position: absolute; inset: 0;
+      background: radial-gradient(600px 200px at 90% 20%, rgba(52,211,153,0.14), transparent 70%);
+      pointer-events: none;
+    }
+    .hero .logo {
+      width: 54px; height: 54px; border-radius: 15px; flex-shrink: 0;
+      background: linear-gradient(135deg, var(--green), var(--blue));
+      display: grid; place-items: center; font-size: 26px;
+      box-shadow: 0 8px 24px -6px rgba(52,211,153,0.5);
+    }
+    .hero h1 { margin: 0; font-size: 27px; font-weight: 800; letter-spacing: -0.02em; }
+    .hero p { margin: 4px 0 0; color: var(--muted); font-size: 14px; }
+    .hero .stamp { margin-left: auto; text-align: right; font-size: 12.5px; color: var(--muted); }
+    .hero .stamp .today { color: var(--text); font-weight: 600; }
+
+    /* Summary cards */
+    .summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin: 26px 0; }
+    .card {
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 18px; padding: 20px 22px; backdrop-filter: blur(8px);
+      transition: transform .18s ease, background .18s ease, border-color .18s ease;
+    }
+    .card:hover { transform: translateY(-3px); background: var(--panel-hover); border-color: var(--border-strong); }
+    .card .label { color: var(--faint); font-size: 11.5px; text-transform: uppercase; letter-spacing: .09em; font-weight: 600; }
+    .card .value { font-size: 32px; font-weight: 800; margin-top: 8px; letter-spacing: -0.02em; }
+    .card .value.sm { font-size: 19px; }
+    .card .sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+    .card .value.accent { background: linear-gradient(120deg, var(--green), var(--blue)); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+
+    /* Overall progress with ring */
+    .overall {
+      display: flex; align-items: center; gap: 30px;
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 20px; padding: 26px 30px; margin-bottom: 30px; backdrop-filter: blur(8px);
+    }
+    .ring { position: relative; width: 128px; height: 128px; flex-shrink: 0; }
+    .ring svg { transform: rotate(-90deg); }
+    .ring .ring-label {
+      position: absolute; inset: 0; display: grid; place-items: center;
+      font-size: 28px; font-weight: 800; letter-spacing: -0.02em;
+    }
+    .overall .ov-body { flex: 1; }
+    .overall .ov-title { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--faint); font-weight: 600; margin-bottom: 10px; }
+    .track { height: 12px; background: var(--track); border-radius: 999px; overflow: hidden; }
+    .fill { height: 100%; background: linear-gradient(90deg, var(--green), var(--blue), var(--violet)); border-radius: 999px; width: 0; transition: width 1s cubic-bezier(.22,1,.36,1); }
+    .ov-meta { display: flex; gap: 20px; margin-top: 14px; flex-wrap: wrap; }
+    .ov-meta .m { font-size: 13px; color: var(--muted); }
+    .ov-meta .m b { color: var(--text); font-weight: 700; }
+
+    /* Legend */
+    .legend { display: flex; gap: 20px; margin: 0 0 24px 4px; color: var(--muted); font-size: 13px; flex-wrap: wrap; }
+    .legend span { display: inline-flex; align-items: center; gap: 8px; }
+    .legend .d { width: 10px; height: 10px; border-radius: 50%; }
+
+    /* Phase blocks */
+    .phase {
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 18px; margin-bottom: 20px; overflow: hidden; backdrop-filter: blur(8px);
+      transition: border-color .18s ease;
+    }
+    .phase:hover { border-color: var(--border-strong); }
+    .phase-head { display: flex; align-items: center; gap: 14px; padding: 18px 22px; }
+    .phase-head .idx {
+      width: 30px; height: 30px; border-radius: 9px; flex-shrink: 0;
+      display: grid; place-items: center; font-size: 13px; font-weight: 700;
+      background: rgba(255,255,255,0.06); color: var(--muted);
+    }
+    .phase.complete .idx { background: linear-gradient(135deg, var(--green), var(--blue)); color: #06121f; }
+    .phase-head .name { font-weight: 700; font-size: 15.5px; }
+    .phase-head .days { color: var(--faint); font-size: 12.5px; margin-top: 1px; }
+    .phase-head .mini-wrap { flex: 1; display: flex; align-items: center; gap: 12px; justify-content: flex-end; }
+    .phase-head .mini-track { height: 7px; background: var(--track); border-radius: 999px; overflow: hidden; width: 200px; }
+    .phase-head .mini-fill { height: 100%; background: linear-gradient(90deg, var(--green), var(--blue)); border-radius: 999px; transition: width .8s cubic-bezier(.22,1,.36,1); }
+    .phase-head .mini-pct { color: var(--muted); font-size: 13px; min-width: 42px; text-align: right; font-weight: 600; }
+
+    .tasks { list-style: none; margin: 0; padding: 4px 0 8px; }
+    .task { display: flex; align-items: center; gap: 14px; padding: 11px 22px; transition: background .15s ease; }
+    .task:hover { background: rgba(255,255,255,0.03); }
+    .dot { width: 11px; height: 11px; border-radius: 50%; flex-shrink: 0; }
+    .task .t-main { flex: 1; min-width: 0; }
+    .task .t-title { font-size: 14px; font-weight: 500; }
+    .task .t-day { color: var(--faint); font-size: 12px; margin-top: 1px; }
+    .badge { font-size: 10.5px; font-weight: 700; padding: 4px 11px; border-radius: 999px; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
+
+    .status-done .dot { background: var(--green); box-shadow: 0 0 12px rgba(52,211,153,0.5); }
+    .status-done .badge { background: rgba(52,211,153,.14); color: var(--green); }
+    .status-done .t-title { color: var(--muted); }
+    .status-active .dot { background: var(--amber); box-shadow: 0 0 0 4px rgba(251,191,36,.18), 0 0 12px rgba(251,191,36,0.5); animation: pulse 1.8s infinite; }
+    .status-active .badge { background: rgba(251,191,36,.14); color: var(--amber); }
+    .status-todo .dot { background: var(--gray); }
+    .status-todo .badge { background: rgba(71,80,105,.3); color: var(--muted); }
+
+    @keyframes pulse { 0%,100% { box-shadow: 0 0 0 4px rgba(251,191,36,.18), 0 0 12px rgba(251,191,36,0.5);} 50% { box-shadow: 0 0 0 7px rgba(251,191,36,.06), 0 0 16px rgba(251,191,36,0.7);} }
+
+    footer { color: var(--faint); font-size: 12px; margin-top: 36px; text-align: center; }
+
+    @media (max-width: 760px) {
+      .summary { grid-template-columns: repeat(2, 1fr); }
+      .hero { flex-wrap: wrap; }
+      .hero .stamp { margin-left: 0; text-align: left; width: 100%; }
+      .overall { flex-direction: column; align-items: flex-start; }
+      .phase-head .mini-track { width: 100px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="hero">
+      <div class="logo">💬</div>
+      <div>
+        <h1>WA AI Tool — Build Progress</h1>
+        <p>Workflow automation engine with a WhatsApp adapter</p>
+      </div>
+      <div class="stamp" id="stamp"></div>
+    </header>
+
+    <section class="summary" id="summary"></section>
+
+    <div class="overall">
+      <div class="ring">
+        <svg width="128" height="128">
+          <circle cx="64" cy="64" r="56" fill="none" stroke="rgba(255,255,255,0.07)" stroke-width="12" />
+          <circle id="ringFill" cx="64" cy="64" r="56" fill="none" stroke="url(#grad)" stroke-width="12"
+            stroke-linecap="round" stroke-dasharray="351.86" stroke-dashoffset="351.86" />
+          <defs>
+            <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#34d399" />
+              <stop offset="50%" stop-color="#60a5fa" />
+              <stop offset="100%" stop-color="#a78bfa" />
+            </linearGradient>
+          </defs>
+        </svg>
+        <div class="ring-label" id="ringLabel">0%</div>
+      </div>
+      <div class="ov-body">
+        <div class="ov-title">Overall completion</div>
+        <div class="track"><div class="fill" id="overallFill"></div></div>
+        <div class="ov-meta" id="ovMeta"></div>
+      </div>
+    </div>
+
+    <div class="legend">
+      <span><span class="d" style="background:var(--green)"></span> Completed</span>
+      <span><span class="d" style="background:var(--amber)"></span> In progress</span>
+      <span><span class="d" style="background:var(--gray)"></span> Not started</span>
+    </div>
+
+    <section id="phases"></section>
+
+    <footer>Live project dashboard · updates from progress-data.js</footer>
+  </div>
+
+  <script src="progress-data.js"></script>
+  <script>
+    const statusLabel = { done: "Done", active: "In progress", todo: "To do" };
+    const statusClass = { done: "status-done", active: "status-active", todo: "status-todo" };
+
+    function countTasks(phase) {
+      const total = phase.tasks.length;
+      const done = phase.tasks.filter(t => t.status === "done").length;
+      return { total, done };
+    }
+
+    const allTasks = PLAN.flatMap(p => p.tasks);
+    const totalTasks = allTasks.length;
+    const doneTasks = allTasks.filter(t => t.status === "done").length;
+    const activeTasks = allTasks.filter(t => t.status === "active").length;
+    const overallPct = totalTasks ? Math.round((doneTasks / totalTasks) * 100) : 0;
+
+    // Live deadline countdown.
+    const deadlineDate = new Date(DEADLINE);
+    const now = new Date();
+    const msPerDay = 1000 * 60 * 60 * 24;
+    const daysLeft = Math.ceil((deadlineDate - now) / msPerDay);
+    const daysLeftText = daysLeft > 0 ? daysLeft + " days left" : (daysLeft === 0 ? "Due today" : Math.abs(daysLeft) + " days overdue");
+
+    const currentPhase = PLAN.find(p => p.tasks.some(t => t.status === "active"))
+      || PLAN.find(p => p.tasks.some(t => t.status === "todo"))
+      || PLAN[PLAN.length - 1];
+
+    // Summary cards
+    document.getElementById("summary").innerHTML = `
+      <div class="card"><div class="label">Overall</div><div class="value accent">${overallPct}%</div><div class="sub">${doneTasks}/${totalTasks} tasks done</div></div>
+      <div class="card"><div class="label">Current phase</div><div class="value sm">${currentPhase.name.replace(/^Phase \d+ — /, "")}</div><div class="sub">${currentPhase.days}</div></div>
+      <div class="card"><div class="label">In progress</div><div class="value">${activeTasks}</div><div class="sub">task(s) active now</div></div>
+      <div class="card"><div class="label">Deadline</div><div class="value sm">${DEADLINE}</div><div class="sub">${daysLeftText}</div></div>
+    `;
+
+    // Overall ring + bar (animate after paint)
+    const circumference = 2 * Math.PI * 56;
+    document.getElementById("ringLabel").textContent = overallPct + "%";
+    document.getElementById("ovMeta").innerHTML = `
+      <span class="m"><b>${doneTasks}</b> done</span>
+      <span class="m"><b>${activeTasks}</b> in progress</span>
+      <span class="m"><b>${totalTasks - doneTasks - activeTasks}</b> to do</span>
+      <span class="m"><b>${PLAN.length}</b> phases</span>
+    `;
+    requestAnimationFrame(() => {
+      document.getElementById("overallFill").style.width = overallPct + "%";
+      document.getElementById("ringFill").style.transition = "stroke-dashoffset 1.1s cubic-bezier(.22,1,.36,1)";
+      document.getElementById("ringFill").style.strokeDashoffset = circumference * (1 - overallPct / 100);
+    });
+
+    // Stamp
+    const today = new Date().toLocaleDateString("en-US", { weekday: "short", year: "numeric", month: "short", day: "numeric" });
+    document.getElementById("stamp").innerHTML = `<div class="today">${today}</div>Last updated: ${LAST_UPDATED}`;
+
+    // Phases
+    document.getElementById("phases").innerHTML = PLAN.map((phase, i) => {
+      const { total, done } = countTasks(phase);
+      const pct = total ? Math.round((done / total) * 100) : 0;
+      const complete = pct === 100;
+      const tasks = phase.tasks.map(t => `
+        <li class="task ${statusClass[t.status]}">
+          <span class="dot"></span>
+          <div class="t-main">
+            <div class="t-title">${t.title}</div>
+            <div class="t-day">${t.day}${t.date ? " · " + t.date : ""}</div>
+          </div>
+          <span class="badge">${statusLabel[t.status]}</span>
+        </li>
+      `).join("");
+      return `
+        <div class="phase ${complete ? "complete" : ""}">
+          <div class="phase-head">
+            <span class="idx">${complete ? "✓" : i}</span>
+            <div>
+              <div class="name">${phase.name}</div>
+              <div class="days">${phase.days}</div>
+            </div>
+            <div class="mini-wrap">
+              <span class="mini-track"><span class="mini-fill" style="width:${pct}%"></span></span>
+              <span class="mini-pct">${pct}%</span>
+            </div>
+          </div>
+          <ul class="tasks">${tasks}</ul>
+        </div>
+      `;
+    }).join("");
+  </script>
+</body>
+</html>

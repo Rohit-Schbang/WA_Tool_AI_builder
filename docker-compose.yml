@@ -1,0 +1,25 @@
+# Runs PostgreSQL in a container so you don't have to install it manually.
+# Start it with:  docker compose up -d
+# Stop it with:   docker compose down
+# Data persists in the named volume "wa_pgdata" even after "down".
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: wa_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: wa_user
+      POSTGRES_PASSWORD: wa_password
+      POSTGRES_DB: wa_ai_tool
+    ports:
+      # host:container  ->  connect from your machine on localhost:5544
+      # A native Windows PostgreSQL occupies 5432 AND 5433, so we use an
+      # uncommon host port (5544) that nothing else is using. Inside the
+      # container Postgres still listens on its normal 5432.
+      - "5544:5432"
+    volumes:
+      - wa_pgdata:/var/lib/postgresql/data
+
+volumes:
+  wa_pgdata:

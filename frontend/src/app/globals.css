@@ -1,0 +1,7 @@
+/* These three directives inject Tailwind's styles.
+   @tailwind base      -> resets + base styles
+   @tailwind components -> component classes (and daisyUI's)
+   @tailwind utilities  -> utility classes (p-4, flex, text-lg, etc.) */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;

@@ -1,0 +1,237 @@
+// Prisma schema for the WA AI Tool.
+//
+// This file describes the database tables (called "models" in Prisma).
+// Run `npm run prisma:migrate` to turn this into real Postgres tables,
+// and `npm run prisma:generate` to generate the typed client.
+//
+// Design principles (from the Stage 1 doc):
+//   - Relational tables manage ownership, lifecycle and runtime state.
+//   - The workflow graph itself lives as JSON (definition column), not
+//     spread across dozens of tables (ADR-002, ADR-009).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Users — basic authentication (MVP).
+// ---------------------------------------------------------------------------
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  passwordHash String
+  name         String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  chatbots     Chatbot[]
+  contacts      Contact[]
+}
+
+// ---------------------------------------------------------------------------
+// Chatbot — the top-level container a user creates and manages.
+// Owns a draft workflow and a series of published versions.
+// ---------------------------------------------------------------------------
+model Chatbot {
+  id        String        @id @default(cuid())
+  name      String
+  isActive  Boolean       @default(false)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  ownerId   String
+  owner     User          @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  // The id of the currently published version that the runtime executes.
+  // Null until the chatbot is published for the first time.
+  activeVersionId String?  @unique
+
+  versions      WorkflowVersion[]
+  connection    Connection?
+  conversations Conversation[]
+
+  @@index([ownerId])
+}
+
+// ---------------------------------------------------------------------------
+// WorkflowVersion — a workflow definition.
+//
+// status = "draft"     -> the editable version the builder saves to.
+// status = "published" -> an immutable snapshot the runtime executes (ADR-004).
+//
+// The whole node/edge graph is stored in `definition` as JSON (ADR-002).
+// ---------------------------------------------------------------------------
+model WorkflowVersion {
+  id           String    @id @default(cuid())
+  chatbotId    String
+  chatbot      Chatbot   @relation(fields: [chatbotId], references: [id], onDelete: Cascade)
+
+  version      Int                        // 1, 2, 3... (draft is version 0 by convention)
+  status       WorkflowStatus @default(DRAFT)
+  definition   Json                       // { version, workflow, nodes[], edges[] }
+
+  createdAt    DateTime  @default(now())
+  publishedAt  DateTime?
+
+  conversations Conversation[]
+
+  // A chatbot can only have one row per (chatbot, version) number.
+  @@unique([chatbotId, version])
+  @@index([chatbotId])
+}
+
+enum WorkflowStatus {
+  DRAFT
+  PUBLISHED
+}
+
+// ---------------------------------------------------------------------------
+// Connection — WhatsApp configuration for a chatbot.
+//
+// SECURITY (ADR-008): secrets (accessToken, appSecret, verifyToken) live
+// ONLY here in the backend DB. The API must never send them to the frontend.
+// ---------------------------------------------------------------------------
+model Connection {
+  id             String   @id @default(cuid())
+  chatbotId      String   @unique
+  chatbot        Chatbot  @relation(fields: [chatbotId], references: [id], onDelete: Cascade)
+
+  // Safe-to-display fields
+  businessName   String?
+  phoneNumber    String?
+  phoneNumberId  String?           // Meta "Phone Number ID" used to send messages
+  wabaId         String?           // WhatsApp Business Account ID
+  status         ConnectionStatus @default(DISCONNECTED)
+
+  // Secret fields — backend only, never returned to the client
+  accessToken    String?
+  appId          String?
+  appSecret      String?
+  verifyToken    String?           // used to verify the webhook subscription
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+enum ConnectionStatus {
+  DISCONNECTED
+  CONNECTED
+  ERROR
+}
+
+// ---------------------------------------------------------------------------
+// Conversation — the runtime state for one WhatsApp user talking to one bot.
+//
+// This is what lets the engine resume: it remembers the current node and
+// the collected variables between inbound messages (ADR-003, ADR-005).
+// ---------------------------------------------------------------------------
+model Conversation {
+  id                String   @id @default(cuid())
+  chatbotId         String
+  chatbot           Chatbot  @relation(fields: [chatbotId], references: [id], onDelete: Cascade)
+
+  // Which published version this conversation is running (pinned so a new
+  // publish doesn't disrupt in-flight conversations).
+  workflowVersionId String
+  workflowVersion   WorkflowVersion @relation(fields: [workflowVersionId], references: [id])
+
+  // The WhatsApp user's phone number (their WhatsApp ID).
+  waUserId          String
+
+  currentNodeId     String?
+  status            ConversationStatus @default(ACTIVE)
+  variables         Json     @default("{}")   // { name: "Rahul", city: "Mumbai" }
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  lastMessageAt     DateTime?
+
+  messages          Message[]
+
+  // One active conversation per (chatbot, whatsapp user).
+  @@unique([chatbotId, waUserId])
+  @@index([chatbotId])
+}
+
+enum ConversationStatus {
+  ACTIVE
+  WAITING_FOR_INPUT
+  COMPLETED
+  FAILED
+}
+
+// ---------------------------------------------------------------------------
+// Message — a log of every inbound/outbound message (basic logging, MVP).
+// Stores the Meta message id so we can match async status webhooks later.
+// ---------------------------------------------------------------------------
+model Message {
+  id             String   @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  direction      MessageDirection
+  messageType    String            // text | button | list | media | template
+  content        Json              // raw payload we sent or received
+  waMessageId    String?           // Meta's message id (for status matching)
+  status         String?           // sent | delivered | read | failed
+
+  createdAt      DateTime @default(now())
+
+  @@index([conversationId])
+}
+
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+// ---------------------------------------------------------------------------
+// Execution — a log of a single runtime run (basic execution logs, MVP).
+// One row per "webhook arrived -> engine ran some nodes" cycle.
+// ---------------------------------------------------------------------------
+model Execution {
+  id             String   @id @default(cuid())
+  conversationId String
+  chatbotId      String
+
+  status         ExecutionStatus @default(RUNNING)
+  startNodeId    String?
+  endNodeId      String?
+  error          String?
+
+  createdAt      DateTime @default(now())
+  finishedAt     DateTime?
+
+  @@index([conversationId])
+  @@index([chatbotId])
+}
+
+enum ExecutionStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+model Contact {
+  id    String    @id @default(cuid())
+  name String 
+  phone String
+  tags String[]   @default([])
+  notes String?
+
+  ownerId String
+  owner User @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+
+  // A user can't have the same phone number twice .
+  @@unique([ownerId,phone])
+  @@index([ownerId])
+}
+
