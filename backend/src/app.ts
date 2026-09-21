@@ -22,6 +22,7 @@ import { workflowsRouter } from "./modules/workflows/routes.js";
 import { conversationsRouter } from "./modules/conversations/routes.js";
 import { connectionRouter } from "./modules/whatsapp/connection/routes.js";
 import { webhookRouter } from "./modules/whatsapp/webhook/routes.js";
+import { contactsRouter } from "./modules/contacts/routes.js";
 
 export function createApp() {
   const app = express();
@@ -47,6 +48,7 @@ export function createApp() {
   app.use("/api/chatbots/:chatbotId/conversations", conversationsRouter);
   app.use("/api/chatbots/:chatbotId/connection", connectionRouter);
   app.use("/api/whatsapp", webhookRouter);
+  app.use("/api/contacts", contactsRouter);
 
   // --- 404 fallback ---
   // Runs if no route above matched.
