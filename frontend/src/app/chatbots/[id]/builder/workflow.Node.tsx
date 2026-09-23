@@ -10,8 +10,7 @@ const TITLE: Record<string, string> = {
     WAIT: "Delay",
     AI_RESPONSE: "AI Reply",
     API_REQUEST: "API Request",
-    VALIDATE: "Validate",
-    TRANSFORM: "Transform",
+    TRANSFORM: "Custom Code",
     END: "End",
     BUTTONS: "Buttons",
     LIST: "List",
@@ -28,7 +27,6 @@ const STYLE: Record<string, { icon: string; accent: string; ring: string; chip: 
     CONDITION: { icon: "🔀", accent: "bg-amber-500", ring: "border-amber-200", chip: "text-amber-600" },
     AI_RESPONSE: { icon: "✨", accent: "bg-fuchsia-500", ring: "border-fuchsia-200", chip: "text-fuchsia-600" },
     SET_VARIABLE: { icon: "🏷️", accent: "bg-slate-500", ring: "border-slate-200", chip: "text-slate-600" },
-    VALIDATE: { icon: "✅", accent: "bg-lime-600", ring: "border-lime-200", chip: "text-lime-700" },
     TRANSFORM: { icon: "🔧", accent: "bg-orange-500", ring: "border-orange-200", chip: "text-orange-600" },
     API_REQUEST: { icon: "🌐", accent: "bg-blue-600", ring: "border-blue-200", chip: "text-blue-700" },
     WAIT: { icon: "⏱️", accent: "bg-rose-500", ring: "border-rose-200", chip: "text-rose-600" },
@@ -57,11 +55,9 @@ export function WorkFlowNode({ id, data, selected }: NodeProps) {
     else if (nodeType === "LIST") preview = config.text || "(no prompt)";
     else if (nodeType === "AI_RESPONSE") preview = config.prompt || "(no prompt)";
     else if (nodeType === "API_REQUEST") preview = config.url ? `${config.method ?? "GET"} ${config.url}` : "(no URL)";
-    else if (nodeType === "VALIDATE") preview = config.expression || config.pattern || "(no rule)";
     else if (nodeType === "TRANSFORM") preview = config.variable ? `→ ${config.variable}` : "(no output var)";
 
     const isCondition = nodeType === "CONDITION";
-    const isValidate = nodeType === "VALIDATE";
     const isApi = nodeType === "API_REQUEST";
     const isStart = nodeType === "START";
     const hasFallback = !!config.fallback?.enabled;
@@ -136,16 +132,16 @@ export function WorkFlowNode({ id, data, selected }: NodeProps) {
                 )}
             </div>
 
-            {/* Branch outputs (condition / validate / api) */}
-            {(isCondition || isValidate || isApi) && (
+            {/* Branch outputs (condition / api) */}
+            {(isCondition || isApi) && (
                 <div className="relative px-3 pb-3 pt-1">
                     <div className="flex justify-between text-[10px] font-medium">
                         <span className="flex items-center gap-1 text-emerald-600">
                             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                            {isValidate ? "pass" : isApi ? "success" : "true"}
+                            {isApi ? "success" : "true"}
                         </span>
                         <span className="flex items-center gap-1 text-rose-500">
-                            {isValidate ? "fail" : isApi ? "failure" : "else"}
+                            {isApi ? "failure" : "else"}
                             <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
                         </span>
                     </div>
@@ -155,7 +151,7 @@ export function WorkFlowNode({ id, data, selected }: NodeProps) {
             )}
 
             {/* Single output for plain nodes */}
-            {!isChoice && !isCondition && !isValidate && !isApi && (
+            {!isChoice && !isCondition && !isApi && (
                 <Handle type="source" position={Position.Bottom} className={handleClass} />
             )}
         </div>
