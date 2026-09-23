@@ -39,7 +39,7 @@ export default function ChatbotsPage() {
             const res = await api.get("/api/chatbots")
             setBots(res.data)
         } catch (error) {
-            setError("Failed to lead chatbots")
+            setError("Failed to load chatbots")
         }
         finally {
             setIsLoading(false)
