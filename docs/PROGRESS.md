@@ -5,8 +5,8 @@
 > file is the detailed technical companion — what each piece actually does,
 > how it works, and any decisions/gotchas worth remembering.
 
-**Last updated:** Sep 22, 2026
-**Current phase:** Manager Change Request — Builder overhaul (Batch A done, Batch B next)
+**Last updated:** Sep 23, 2026
+**Current phase:** Manager Change Request — Builder overhaul (Batches A, B, C + polish done; Batch D #11 auto-save next)
 
 ---
 
@@ -50,6 +50,112 @@ plus one backend validator change.
 
 Verified: backend `tsc --noEmit` clean, frontend no diagnostics, builder page
 serves 200 and compiles in the dev server.
+
+### Batch B — Builder + schema (done, Sep 22)
+- **#2 Workflow Variables.** Workflow-level variables `{ name, type, default }`
+  stored in `definition.variables`. Managed via two modals (View list + Add) so
+  the canvas doesn't shift. At runtime, `seedVariableDefaults()` in
+  `conversations/service.ts` seeds declared defaults (type-coerced) into a new
+  conversation's variables.
+- **#16 Start node keywords & triggers.** START config gets `keywords[]` +
+  `matchType` (contains / exact / starts_with). `matchesTrigger()` in the
+  conversation service gates *new* conversation creation — a first message that
+  doesn't match returns `no_trigger_match` and the flow doesn't start. Empty
+  keywords = trigger on anything (backward compatible).
+- **#12 Send Message header/body/footer.** New `MessageHeader`/`RichMessage`
+  types + `sendRichMessage` on all three adapters (Console composes text +
+  passes media separately; WhatsApp sends a media message w/ caption for media
+  headers, folds text header/footer into text; Logging logs it). Builder shows
+  header type (text/image/document/video) + value, body, footer, with a **media
+  preview** in both the config panel and the test chat.
+- **#10 Buttons folded into Send Message.** The standalone BUTTONS node was
+  removed from the palette (executor kept for old flows). Send Message now
+  carries buttons; each button is either **CTA** (a reply button that branches
+  to a node) or **Visit URL** (opens a link via `sendCtaUrl`, no branch).
+  Executor splits `cta` vs `url` kinds. WhatsApp can't mix reply + URL buttons
+  in one message (noted in UI).
+
+### Batch C — New nodes + engine (done, Sep 23)
+- **Safe JS sandbox** (`runtime/sandbox.ts`): `evalExpression()` runs small
+  user expressions in Node's `vm` with dangerous globals removed
+  (no require/process/fetch), a 1s timeout, exposing only `vars` + safe
+  built-ins (Math/Date/JSON/etc). NOT a hardened boundary — acceptable because
+  workflow authors are the chatbot's own owner. Would need `isolated-vm` /
+  separate process if ever opened to untrusted authors.
+- **#5 INPUT_TYPE node.** Prompt → wait → validate by type
+  (text/number/email/phone/image/video/document/location) → store (numbers
+  coerced). Re-prompts on invalid with a configurable message. (Bug fixed:
+  image/video/document originally accepted any non-empty string; now requires a
+  real URL.)
+- **#7.1 VALIDATE node.** `mode` = expression | regex. Branches **pass/else**.
+  Expression uses the sandbox; regex uses `RegExp`. Validator requires both
+  branch edges (like CONDITION).
+- **#7.2 TRANSFORM node.** Runs a JS expression via the sandbox, assigns the
+  result to an output variable. Single output.
+- **#9 API_REQUEST node.** Method/URL/query/headers/body all interpolate
+  `{{vars}}`. Timeout via `AbortController` (clamped 1–60s, default 10s).
+  Parses JSON/text response; maps response dot-paths → variables
+  (`getByPath`); optional status/response/error variables. Branches
+  **success** (2xx) / **failure** (non-2xx or timeout).
+- **#1 Global API configs.** Workflow-level reusable configs
+  `{ name, baseUrl, headers[] }` stored in `definition.apiConfigs`, managed via
+  a modal. API nodes reference one by name; the executor merges base URL +
+  shared headers. Configs are surfaced to the runtime via
+  `ExecutionContext.apiConfigs`.
+
+### Batch C polish / enhancements (Sep 22–23)
+- **Question node validation** (ASK_INPUT): validation type
+  (phone/email/url/number/alphanumeric/custom regex), footer, **retry limit
+  (max 5)**, and failure message. On repeated invalid input it re-prompts up to
+  the limit, then shows the failure message once and continues (stores the last
+  value) so the flow never dead-ends. Retry count tracked in a reserved
+  `__retry_<nodeId>` variable.
+- **No-reply fallback** on waiting nodes (Question + Input): enable + timeout
+  minutes (≤10) + fallback message + optional go-to node. Fired by a background
+  **`setInterval` sweeper** (`conversations/fallbackSweeper.ts`, every 20s,
+  started in `server.ts`) that finds conversations idle in
+  `WAITING_FOR_INPUT` past their node's timeout, sends the message, optionally
+  jumps to a node and runs the engine. Fired-once guard via
+  `__fallbackFired_<nodeId>`, cleared when the user replies. Validator treats a
+  fallback go-to target as "connected" so it isn't flagged as an orphan.
+  NOTE: single-instance only (in-process interval); would move to BullMQ for
+  multi-instance (already on V2.3 roadmap).
+- **Reusable variable UX** (`builder/VariableInputs.tsx`): `VariableTextInput`
+  (textarea/input with WhatsApp-markdown B/I/S buttons, emoji picker, and a
+  **+ Add variable** dropdown that inserts `{{name}}` or creates a new var) and
+  `VariableSelect` (dropdown of vars + create-new, for "store into" fields).
+  Wired across every relevant field (message body/footer, prompts, condition,
+  set-variable, AI prompt, input, API URL/headers/query/body/response-map).
+  Brace-stripping guards so a variable can never be named `{{x}}`.
+- **Canvas polish:** edges switched to **smoothstep** (tree-style) with
+  **labels** showing the source button/branch name; **dagre auto-layout**
+  buttons (vertical/horizontal) via `builder/autoLayout.ts` (named that way
+  because Next.js reserves `layout.ts`); node cards redesigned with colored
+  per-type header strips + icons; React Flow attribution hidden
+  (`proOptions.hideAttribution`).
+- **Better publish errors:** validator now returns structured
+  `{ message, nodeId }` errors using friendly node names (not raw ids); the
+  builder renders each as a **clickable** item that pans/zooms + highlights the
+  offending node.
+- **API body JSON hint:** the request-body field warns live when the JSON is
+  invalid (catches the classic unquoted `"name": {{v}}` mistake — must be
+  `"name": "{{v}}"`).
+
+### Infra note — Supabase migration (Sep 23)
+- DB switched from local Docker Postgres to **Supabase**. The Supabase DB
+  already had the 8 tables (from a prior push) but no Prisma migration history,
+  so `migrate deploy` hit `P3005`. Resolved by **baselining** both migrations
+  (`migrate resolve --applied ...`) — non-destructive; status now "up to date".
+- The `EPERM ... query_engine-windows.dll.node` error during `prisma generate`
+  was a Windows file lock from the running backend (`tsx watch`) holding the
+  engine DLL — fixed by stopping the backend node processes first, not a DB
+  issue.
+- TODO for reliable Supabase migrations: add a `directUrl` (direct 5432)
+  alongside the pooler `url` in `schema.prisma`.
+
+### Batch D — remaining (next session)
+- **#11 Auto-save**: localStorage immediate + DB sync every 30s with
+  change-detection and retry. This is the only change-request item left.
 
 ---
 

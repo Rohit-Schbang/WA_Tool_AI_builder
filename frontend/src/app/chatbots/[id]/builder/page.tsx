@@ -117,6 +117,29 @@ const PALETTE_GROUPS: {
 // Nodes that branch via their own labeled handles (per-option or true/else),
 // so a plain "Connect to node" would be ambiguous for them. Send Message is
 // multi-output only when it has reply buttons configured (#10).
+// Check whether an API body would be valid JSON once {{vars}} are filled in.
+// We substitute each {{x}} with a quoted sample string, then try JSON.parse.
+// This catches the classic mistake of {"name": {{v}}} (unquoted value).
+function checkBodyJson(body: string): { ok: boolean; hint?: string } {
+  const trimmed = (body ?? "").trim();
+  if (!trimmed) return { ok: true };
+  // Replace placeholders with a BARE token (no quotes). This way:
+  //   "name": "{{v}}"  -> "name": "sample"  (valid — var was quoted)
+  //   "name": {{v}}    -> "name": sample    (invalid — var was NOT quoted)
+  // which correctly flags only the unquoted-value mistake.
+  const filled = trimmed.replace(/\{\{\s*\w+\s*\}\}/g, "sample");
+  try {
+    JSON.parse(filled);
+    return { ok: true };
+  } catch {
+    // Heuristic: if there's an unquoted {{var}} value, suggest quoting it.
+    if (/:\s*\{\{\s*\w+\s*\}\}/.test(trimmed)) {
+      return { ok: false, hint: 'Wrap variable values in quotes, e.g. "name": "{{f_name}}"' };
+    }
+    return { ok: false, hint: "This doesn't look like valid JSON." };
+  }
+}
+
 function isMultiOutput(node: { nodeType: string; config?: any }) {
   if (["CONDITION", "API_REQUEST", "LIST"].includes(node.nodeType)) return true;
   // Send Message is multi-output only when it has CTA (branching) buttons.
@@ -1810,6 +1833,14 @@ function BuilderInner() {
                       rows={3}
                       placeholder={'{ "name": "{{name}}" }'}
                     />
+                    {(() => {
+                      const check = checkBodyJson(selectedNode.data.config.body ?? "");
+                      return check.ok ? null : (
+                        <span className="text-[11px] text-error mt-1 flex items-center gap-1">
+                          ⚠️ {check.hint}
+                        </span>
+                      );
+                    })()}
                   </label>
                 )}
 
