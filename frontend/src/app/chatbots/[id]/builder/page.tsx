@@ -388,7 +388,7 @@ function BuilderInner() {
     setShowVarAdd(true);
   }
   function saveNewVariable() {
-    const name = newVar.name.trim();
+    const name = newVar.name.trim().replace(/[{}]/g, "").trim();
     if (!name) return;
     setVariables((vs) =>
       vs.some((v) => v.name === name) ? vs.map((v) => (v.name === name ? newVar : v)) : [...vs, { ...newVar, name }]
@@ -401,7 +401,8 @@ function BuilderInner() {
   // Create a variable by name if it doesn't already exist (used by the inline
   // "+ Add variable" / "create new" shortcuts in fields).
   function ensureVariable(name: string) {
-    const trimmed = name.trim();
+    // Normalize: variable names are bare (no {{ }} braces).
+    const trimmed = name.trim().replace(/[{}]/g, "").trim();
     if (!trimmed) return;
     setVariables((vs) =>
       vs.some((v) => v.name === trimmed) ? vs : [...vs, { name: trimmed, type: "text", default: "" }]
@@ -902,6 +903,7 @@ function BuilderInner() {
             nodeTypes={nodeTypes}
             defaultEdgeOptions={{ type: "smoothstep" }}
             onInit={(inst) => { rfRef.current = inst; }}
+            proOptions={{ hideAttribution: true }}
             fitView
           >
             <Background />
@@ -1744,36 +1746,54 @@ function BuilderInner() {
                 </div>
                 <label className="form-control">
                   <span className="label-text">URL (supports {"{{var}}"})</span>
-                  <input
-                    className="input input-bordered input-sm"
-                    placeholder="https://api.example.com/users/{{id}}"
+                  <VariableTextInput
                     value={selectedNode.data.config.url ?? ""}
-                    onChange={(e) => updateConfig("url", e.target.value)}
+                    onChange={(v) => updateConfig("url", v)}
+                    variables={variables}
+                    onCreateVariable={ensureVariable}
+                    singleLine
+                    placeholder="https://api.example.com/users/{{id}}"
                   />
                 </label>
 
-                {/* Headers */}
+                {/* Headers — key is plain, value supports variables */}
                 <div className="text-sm font-medium mt-1">Headers</div>
                 {(selectedNode.data.config.headers ?? []).map((hdr: any, idx: number) => (
-                  <div key={idx} className="flex gap-1">
-                    <input className="input input-bordered input-xs flex-1" placeholder="key" value={hdr.key ?? ""}
+                  <div key={idx} className="flex gap-1 items-start">
+                    <input className="input input-bordered input-xs flex-1 mt-0.5" placeholder="key" value={hdr.key ?? ""}
                       onChange={(e) => updateKeyValList("headers", idx, "key", e.target.value)} />
-                    <input className="input input-bordered input-xs flex-1" placeholder="value" value={hdr.value ?? ""}
-                      onChange={(e) => updateKeyValList("headers", idx, "value", e.target.value)} />
-                    <button onClick={() => removeKeyValList("headers", idx)} className="btn btn-xs btn-ghost text-error">✕</button>
+                    <div className="flex-1">
+                      <VariableTextInput
+                        value={hdr.value ?? ""}
+                        onChange={(v) => updateKeyValList("headers", idx, "value", v)}
+                        variables={variables}
+                        onCreateVariable={ensureVariable}
+                        singleLine
+                        placeholder="value"
+                      />
+                    </div>
+                    <button onClick={() => removeKeyValList("headers", idx)} className="btn btn-xs btn-ghost text-error mt-0.5">✕</button>
                   </div>
                 ))}
                 <button onClick={() => addKeyValList("headers")} className="btn btn-xs btn-outline">+ Header</button>
 
-                {/* Query params */}
+                {/* Query params — key is plain, value supports variables */}
                 <div className="text-sm font-medium mt-1">Query params</div>
                 {(selectedNode.data.config.query ?? []).map((q: any, idx: number) => (
-                  <div key={idx} className="flex gap-1">
-                    <input className="input input-bordered input-xs flex-1" placeholder="key" value={q.key ?? ""}
+                  <div key={idx} className="flex gap-1 items-start">
+                    <input className="input input-bordered input-xs flex-1 mt-0.5" placeholder="key" value={q.key ?? ""}
                       onChange={(e) => updateKeyValList("query", idx, "key", e.target.value)} />
-                    <input className="input input-bordered input-xs flex-1" placeholder="value" value={q.value ?? ""}
-                      onChange={(e) => updateKeyValList("query", idx, "value", e.target.value)} />
-                    <button onClick={() => removeKeyValList("query", idx)} className="btn btn-xs btn-ghost text-error">✕</button>
+                    <div className="flex-1">
+                      <VariableTextInput
+                        value={q.value ?? ""}
+                        onChange={(v) => updateKeyValList("query", idx, "value", v)}
+                        variables={variables}
+                        onCreateVariable={ensureVariable}
+                        singleLine
+                        placeholder="value"
+                      />
+                    </div>
+                    <button onClick={() => removeKeyValList("query", idx)} className="btn btn-xs btn-ghost text-error mt-0.5">✕</button>
                   </div>
                 ))}
                 <button onClick={() => addKeyValList("query")} className="btn btn-xs btn-outline">+ Query param</button>
@@ -1782,24 +1802,32 @@ function BuilderInner() {
                 {["POST", "PUT", "PATCH"].includes(selectedNode.data.config.method ?? "GET") && (
                   <label className="form-control">
                     <span className="label-text">Request body (JSON, supports {"{{var}}"})</span>
-                    <textarea
-                      className="textarea textarea-bordered font-mono text-xs"
+                    <VariableTextInput
+                      value={selectedNode.data.config.body ?? ""}
+                      onChange={(v) => updateConfig("body", v)}
+                      variables={variables}
+                      onCreateVariable={ensureVariable}
                       rows={3}
                       placeholder={'{ "name": "{{name}}" }'}
-                      value={selectedNode.data.config.body ?? ""}
-                      onChange={(e) => updateConfig("body", e.target.value)}
                     />
                   </label>
                 )}
 
-                {/* Response mapping */}
+                {/* Response mapping — path is plain, destination is a variable */}
                 <div className="text-sm font-medium mt-1">Map response → variables</div>
                 {(selectedNode.data.config.responseMap ?? []).map((m: any, idx: number) => (
-                  <div key={idx} className="flex gap-1">
+                  <div key={idx} className="flex gap-1 items-center">
                     <input className="input input-bordered input-xs flex-1" placeholder="response path (e.g. data.id)" value={m.path ?? ""}
                       onChange={(e) => updateKeyValList("responseMap", idx, "path", e.target.value)} />
-                    <input className="input input-bordered input-xs flex-1" placeholder="variable" value={m.variable ?? ""}
-                      onChange={(e) => updateKeyValList("responseMap", idx, "variable", e.target.value)} />
+                    <div className="flex-1">
+                      <VariableSelect
+                        value={m.variable ?? ""}
+                        onChange={(v) => updateKeyValList("responseMap", idx, "variable", v)}
+                        variables={variables}
+                        onCreateVariable={ensureVariable}
+                        placeholder="variable"
+                      />
+                    </div>
                     <button onClick={() => removeKeyValList("responseMap", idx)} className="btn btn-xs btn-ghost text-error">✕</button>
                   </div>
                 ))}
@@ -1807,8 +1835,13 @@ function BuilderInner() {
 
                 <label className="form-control mt-1">
                   <span className="label-text">Store status code in (optional)</span>
-                  <input className="input input-bordered input-sm" placeholder="apiStatus" value={selectedNode.data.config.statusVariable ?? ""}
-                    onChange={(e) => updateConfig("statusVariable", e.target.value)} />
+                  <VariableSelect
+                    value={selectedNode.data.config.statusVariable ?? ""}
+                    onChange={(v) => updateConfig("statusVariable", v)}
+                    variables={variables}
+                    onCreateVariable={ensureVariable}
+                    placeholder="Select or create a variable"
+                  />
                 </label>
                 <p className="text-xs text-base-content/50">
                   Connect the <span className="text-success">success</span> and <span className="text-error">failure</span> handles. Failure fires on non-2xx or timeout.

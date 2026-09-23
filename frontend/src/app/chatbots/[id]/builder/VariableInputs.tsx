@@ -80,7 +80,8 @@ export function VariableTextInput({
   }
 
   function createAndInsert() {
-    const name = newName.trim();
+    // Strip braces from the name; we insert the {{ }} form ourselves.
+    const name = newName.trim().replace(/[{}]/g, "").trim();
     if (!name) return;
     onCreateVariable(name);
     insertVariable(name);
@@ -271,7 +272,8 @@ export function VariableSelect({
   }
 
   function createAndSelect() {
-    const name = newName.trim();
+    // Strip any {{ }} a user typed — destinations are bare names.
+    const name = newName.trim().replace(/[{}]/g, "").trim();
     if (!name) return;
     onCreateVariable(name);
     onChange(name);
