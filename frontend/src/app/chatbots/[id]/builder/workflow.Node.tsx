@@ -14,44 +14,58 @@ const TITLE: Record<string, string> = {
     TRANSFORM: "Transform",
     END: "End",
     BUTTONS: "Buttons",
-    LIST: "List"
-}
+    LIST: "List",
+};
 
-// Custom node : a rounded card
+// Per-type visual identity: an icon + an accent color (tailwind classes).
+const STYLE: Record<string, { icon: string; accent: string; ring: string; chip: string }> = {
+    START: { icon: "▶", accent: "bg-emerald-500", ring: "border-emerald-200", chip: "text-emerald-600" },
+    SEND_MESSAGE: { icon: "💬", accent: "bg-sky-500", ring: "border-sky-200", chip: "text-sky-600" },
+    ASK_INPUT: { icon: "❓", accent: "bg-violet-500", ring: "border-violet-200", chip: "text-violet-600" },
+    INPUT_TYPE: { icon: "⌨️", accent: "bg-indigo-500", ring: "border-indigo-200", chip: "text-indigo-600" },
+    BUTTONS: { icon: "🔘", accent: "bg-cyan-500", ring: "border-cyan-200", chip: "text-cyan-600" },
+    LIST: { icon: "📋", accent: "bg-teal-500", ring: "border-teal-200", chip: "text-teal-600" },
+    CONDITION: { icon: "🔀", accent: "bg-amber-500", ring: "border-amber-200", chip: "text-amber-600" },
+    AI_RESPONSE: { icon: "✨", accent: "bg-fuchsia-500", ring: "border-fuchsia-200", chip: "text-fuchsia-600" },
+    SET_VARIABLE: { icon: "🏷️", accent: "bg-slate-500", ring: "border-slate-200", chip: "text-slate-600" },
+    VALIDATE: { icon: "✅", accent: "bg-lime-600", ring: "border-lime-200", chip: "text-lime-700" },
+    TRANSFORM: { icon: "🔧", accent: "bg-orange-500", ring: "border-orange-200", chip: "text-orange-600" },
+    API_REQUEST: { icon: "🌐", accent: "bg-blue-600", ring: "border-blue-200", chip: "text-blue-700" },
+    WAIT: { icon: "⏱️", accent: "bg-rose-500", ring: "border-rose-200", chip: "text-rose-600" },
+    END: { icon: "⏹", accent: "bg-gray-500", ring: "border-gray-200", chip: "text-gray-600" },
+};
+
+const handleClass = "!w-3 !h-3 !bg-white !border-2 !border-gray-400 hover:!border-primary";
+
 export function WorkFlowNode({ id, data, selected }: NodeProps) {
-
     const nodeType: string = data.nodeType;
-
     const seq: number = data.seq;
-    const config = data.config ?? {}
+    const config = data.config ?? {};
 
-    // Custom name (#3, edited in the side panel). Falls back to type + seq.
+    const style = STYLE[nodeType] ?? { icon: "●", accent: "bg-gray-400", ring: "border-gray-200", chip: "text-gray-600" };
     const defaultName = `${TITLE[nodeType] ?? nodeType} ${seq}`;
     const title = config.name?.trim() || defaultName;
 
     let preview = "";
-
-    if (nodeType === "SEND_MESSAGE") preview = config.text || "No Response"
-    else if (nodeType === "ASK_INPUT") preview = config.text || "(No Question)";
+    if (nodeType === "SEND_MESSAGE") preview = config.text || "No message";
+    else if (nodeType === "ASK_INPUT") preview = config.text || "(no question)";
     else if (nodeType === "INPUT_TYPE") preview = `${config.inputType ?? "text"} → ${config.variable || "(no var)"}`;
-    else if (nodeType === "CONDITION") preview = config.field ? `${config.field}= ${config.value ?? ""}` : "(No Condition )"
-    else if (nodeType === "WAIT") preview = config.seconds ? `${config.seconds}s` : "(no delay)";
+    else if (nodeType === "CONDITION") preview = config.field ? `${config.field} = ${config.value ?? ""}` : "(no condition)";
+    else if (nodeType === "WAIT") preview = config.seconds ? `${config.seconds}s delay` : "(no delay)";
     else if (nodeType === "SET_VARIABLE") preview = config.variable ? `${config.variable} = ${config.value ?? ""}` : "(no variable)";
-    else if (nodeType === "BUTTONS") preview = config.text || "(No prompt)";
-    else if (nodeType === "LIST") preview = config.text || "(No prompt)";
-    else if (nodeType === "AI_RESPONSE") preview = config.prompt || "(No prompt)";
+    else if (nodeType === "BUTTONS") preview = config.text || "(no prompt)";
+    else if (nodeType === "LIST") preview = config.text || "(no prompt)";
+    else if (nodeType === "AI_RESPONSE") preview = config.prompt || "(no prompt)";
     else if (nodeType === "API_REQUEST") preview = config.url ? `${config.method ?? "GET"} ${config.url}` : "(no URL)";
-    else if (nodeType === "VALIDATE") preview = config.expression || config.regex || "(no rule)";
+    else if (nodeType === "VALIDATE") preview = config.expression || config.pattern || "(no rule)";
     else if (nodeType === "TRANSFORM") preview = config.variable ? `→ ${config.variable}` : "(no output var)";
 
     const isCondition = nodeType === "CONDITION";
     const isValidate = nodeType === "VALIDATE";
     const isApi = nodeType === "API_REQUEST";
     const isStart = nodeType === "START";
+    const hasFallback = !!config.fallback?.enabled;
 
-    // BUTTONS, LIST, and SEND_MESSAGE-with-CTA-buttons render one output handle
-    // per option. (#10 — Send Message supports buttons directly; only CTA-kind
-    // buttons branch, "url" buttons just open a link and don't get a handle.)
     const sendMsgCtaButtons: { id: string; label: string; kind?: string }[] =
         nodeType === "SEND_MESSAGE" ? (config.buttons ?? []).filter((b: any) => (b.kind ?? "cta") === "cta") : [];
     const isChoice =
@@ -63,73 +77,87 @@ export function WorkFlowNode({ id, data, selected }: NodeProps) {
             nodeType === "LIST" ? (config.rows ?? []) :
                 nodeType === "SEND_MESSAGE" ? sendMsgCtaButtons : [];
 
-    // Map of optionId -> connected node title (#15), passed in from parent.
     const optionTargets: Record<string, string> = data.optionTargets ?? {};
 
     return (
         <div
-            className={`relative rounded-xl border-2 bg-white shadow-sm px-4 py-3 min-w-[180px] transition-shadow ${data.searchHighlight ? "border-warning ring-4 ring-warning/40" :
-                    selected ? "border-primary" : "border-base-300"
-                }`}
+            className={`group relative rounded-2xl bg-white min-w-[210px] max-w-[260px] border transition-all
+                ${data.searchHighlight
+                    ? "border-amber-400 ring-4 ring-amber-300/50 shadow-lg"
+                    : selected
+                        ? "border-primary ring-2 ring-primary/30 shadow-lg"
+                        : `${style.ring} shadow-md hover:shadow-lg`}`}
         >
-            {/* Floating delete button — hidden for START. */}
+            {/* Delete button — hidden for START, appears on hover */}
             {!isStart && (
                 <button
-                    onClick={(e) => {
-                        e.stopPropagation();
-                        data.onDelete?.(id);
-                    }}
-                    className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-error text-white text-xs leading-none flex items-center justify-center shadow hover:scale-110 transition-transform z-10"
+                    onClick={(e) => { e.stopPropagation(); data.onDelete?.(id); }}
+                    className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-error text-white text-xs leading-none flex items-center justify-center shadow opacity-0 group-hover:opacity-100 hover:scale-110 transition-all z-10"
                     title="Delete node"
                 >
                     ✕
                 </button>
             )}
 
-            {/* Target handle (incoming) on top — every node except START. */}
-            {!isStart && <Handle type="target" position={Position.Top} />}
+            {/* Incoming handle */}
+            {!isStart && <Handle type="target" position={Position.Top} className={handleClass} />}
 
-            <div className="font-bold text-sm">{title}</div>
-            <div className="text-[10px] text-base-content/40 uppercase tracking-wide">{TITLE[nodeType] ?? nodeType}</div>
-            {preview && <div className="text-xs text-base-content/70 mt-2 line-clamp-2">{preview}</div>}
-
-            {/* Source handles (outgoing) on the bottom. */}
-            {isCondition || isValidate || isApi ? (
-                // Two outputs: true/else. Labels differ per node type.
-                <>
-                    <Handle type="source" position={Position.Bottom} id="true" style={{ left: "30%" }} />
-                    <Handle type="source" position={Position.Bottom} id="else" style={{ left: "70%" }} />
-                    <div className="flex justify-between text-[10px] text-base-content/60 mt-2">
-                        <span>{isValidate ? "pass" : isApi ? "success" : "true"}</span>
-                        <span>{isValidate ? "fail" : isApi ? "failure" : "else"}</span>
-                    </div>
-                </>
-            ) : isChoice ? (
-                // BUTTONS / LIST: one labeled output per option (#15 shows target).
-                <div className="mt-2 flex flex-col gap-1">
-                    {options.length === 0 && (
-                        <div className="text-[10px] text-base-content/40">Add options in the panel</div>
-                    )}
-                    {options.map((opt) => (
-                        <div key={opt.id} className="relative border border-base-300 rounded px-2 py-1 text-xs">
-                            <div>{opt.label || "(empty)"}</div>
-                            <div className={`text-[9px] ${optionTargets[opt.id] ? "text-success" : "text-base-content/40"}`}>
-                                {optionTargets[opt.id] ? `→ ${optionTargets[opt.id]}` : "Not Connected"}
-                            </div>
-                            <Handle
-                                type="source"
-                                position={Position.Right}
-                                id={opt.id}
-                                style={{ top: "50%" }}
-                            />
-                        </div>
-                    ))}
+            {/* Colored header strip with icon + name */}
+            <div className={`flex items-center gap-2 px-3 py-2 rounded-t-2xl ${style.accent} text-white`}>
+                <span className="text-sm leading-none">{style.icon}</span>
+                <div className="flex-1 min-w-0">
+                    <div className="font-semibold text-sm leading-tight truncate">{title}</div>
+                    <div className="text-[9px] uppercase tracking-wider opacity-80">{TITLE[nodeType] ?? nodeType}</div>
                 </div>
-            ) : (
-                // Every other node has a single output. (END removed — a node
-                // with no outgoing edge simply terminates the flow.)
-                <Handle type="source" position={Position.Bottom} />
+                {hasFallback && <span title="No-reply fallback set" className="text-[10px]">⏳</span>}
+            </div>
+
+            {/* Body */}
+            <div className="px-3 py-2">
+                {preview && <div className="text-xs text-gray-600 line-clamp-2">{preview}</div>}
+
+                {/* Choice options */}
+                {isChoice && (
+                    <div className="mt-2 flex flex-col gap-1.5">
+                        {options.length === 0 && (
+                            <div className="text-[10px] text-gray-400 italic">Add options in the panel</div>
+                        )}
+                        {options.map((opt) => (
+                            <div key={opt.id} className="relative rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-1.5 text-xs">
+                                <div className="font-medium text-gray-700 truncate pr-2">{opt.label || "(empty)"}</div>
+                                <div className={`text-[9px] flex items-center gap-1 ${optionTargets[opt.id] ? "text-emerald-600" : "text-gray-400"}`}>
+                                    <span className={`inline-block w-1.5 h-1.5 rounded-full ${optionTargets[opt.id] ? "bg-emerald-500" : "bg-gray-300"}`} />
+                                    {optionTargets[opt.id] ? `→ ${optionTargets[opt.id]}` : "Not connected"}
+                                </div>
+                                <Handle type="source" position={Position.Right} id={opt.id} className={handleClass} style={{ top: "50%" }} />
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
+
+            {/* Branch outputs (condition / validate / api) */}
+            {(isCondition || isValidate || isApi) && (
+                <div className="relative px-3 pb-3 pt-1">
+                    <div className="flex justify-between text-[10px] font-medium">
+                        <span className="flex items-center gap-1 text-emerald-600">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                            {isValidate ? "pass" : isApi ? "success" : "true"}
+                        </span>
+                        <span className="flex items-center gap-1 text-rose-500">
+                            {isValidate ? "fail" : isApi ? "failure" : "else"}
+                            <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
+                        </span>
+                    </div>
+                    <Handle type="source" position={Position.Bottom} id="true" className={handleClass} style={{ left: "28%" }} />
+                    <Handle type="source" position={Position.Bottom} id="else" className={handleClass} style={{ left: "72%" }} />
+                </div>
+            )}
+
+            {/* Single output for plain nodes */}
+            {!isChoice && !isCondition && !isValidate && !isApi && (
+                <Handle type="source" position={Position.Bottom} className={handleClass} />
             )}
         </div>
-    )
+    );
 }

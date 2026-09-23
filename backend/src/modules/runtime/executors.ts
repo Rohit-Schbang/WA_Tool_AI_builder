@@ -68,21 +68,77 @@ const sendMessage: NodeExecutor = async (node, ctx) => {
   return { action: "next" };
 };
 
+// Preset validation patterns for the ASK_INPUT node's validation types.
+function askInputValid(validationType: string, regex: string | undefined, value: string): boolean {
+  const v = (value ?? "").trim();
+  switch (validationType) {
+    case "phone":
+      return /^\+?[0-9][0-9\s\-()]{8,15}$/.test(v) && (v.match(/\d/g)?.length ?? 0) >= 10;
+    case "email":
+      return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
+    case "url":
+      return /^https?:\/\/.+/.test(v);
+    case "number":
+      return /^[0-9]+$/.test(v);
+    case "alphanumeric":
+      return /^[a-zA-Z0-9]+$/.test(v);
+    case "custom":
+      try { return new RegExp(regex ?? "").test(v); } catch { return true; }
+    default:
+      return true; // "none" or unknown -> no validation
+  }
+}
+
 const askInput: NodeExecutor = async (node, ctx) => {
+  const cfg = node.config ?? {};
   // If there's no incoming message, we're ARRIVING at this node:
-  // send the question and wait for the user's reply.
+  // send the question (+ optional footer) and wait for the user's reply.
   if (ctx.incomingText === null) {
-    const question = interpolate(node.config.text ?? "", ctx.variables);
-    if (question) await ctx.messaging.sendText(ctx.userId, question);
+    const question = interpolate(cfg.text ?? "", ctx.variables);
+    const footer = cfg.footer ? interpolate(cfg.footer, ctx.variables) : "";
+    const full = [question, footer].filter(Boolean).join("\n");
+    if (full) await ctx.messaging.sendText(ctx.userId, full);
     return { action: "wait" };
   }
 
-  // Otherwise the user just replied: capture their answer, then move on.
-  const variable = node.config.variable;
-  if (variable) {
-    ctx.variables[variable] = ctx.incomingText;
+  const validationType = cfg.validationType ?? "none";
+  const variable = cfg.variable;
+
+  // No validation configured — capture and move on (original behavior).
+  if (validationType === "none") {
+    if (variable) ctx.variables[variable] = ctx.incomingText;
+    return { action: "next" };
   }
-  return { action: "next" };
+
+  // Validate the reply.
+  const retryKey = `__retry_${node.id}`;
+  if (askInputValid(validationType, cfg.regex, ctx.incomingText)) {
+    // Valid — store, clear the retry counter, continue.
+    if (variable) ctx.variables[variable] = ctx.incomingText;
+    delete ctx.variables[retryKey];
+    return { action: "next" };
+  }
+
+  // Invalid — increment retry counter.
+  const attempts = Number(ctx.variables[retryKey] ?? 0) + 1;
+  const limit = Math.max(1, Math.min(5, Number(cfg.retryLimit ?? 3)));
+  const failMsg = cfg.failureMessage
+    ? interpolate(cfg.failureMessage, ctx.variables)
+    : "That doesn't look valid. Please try again.";
+
+  if (attempts >= limit) {
+    // Retries exhausted — show the failure message once, store the last
+    // value anyway, and continue so the flow doesn't get stuck.
+    await ctx.messaging.sendText(ctx.userId, failMsg);
+    if (variable) ctx.variables[variable] = ctx.incomingText;
+    delete ctx.variables[retryKey];
+    return { action: "next" };
+  }
+
+  // Still have retries left — record the count, re-prompt, wait.
+  ctx.variables[retryKey] = attempts;
+  await ctx.messaging.sendText(ctx.userId, failMsg);
+  return { action: "wait" };
 };
 
 const condition: NodeExecutor = async (node, ctx) => {
@@ -202,8 +258,9 @@ function validateInput(inputType: string, value: string): boolean {
     case "image":
     case "video":
     case "document":
-      // In the console/test path the user pastes a URL; accept a URL-ish value.
-      return /^https?:\/\/\S+/.test(v) || v.length > 0;
+      // Require an actual URL (in real WhatsApp this would be a media message;
+      // in the test path the user pastes a media URL).
+      return /^https?:\/\/\S+\.\S+/.test(v);
     case "location":
       // "lat,lng"
       return /^-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?$/.test(v);

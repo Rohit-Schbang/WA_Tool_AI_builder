@@ -7,10 +7,13 @@
  */
 import { createApp } from "./app.js";
 import { config } from "./infra/config.js";
+import { startFallbackSweeper } from "./modules/conversations/fallbackSweeper.js";
 
 const app = createApp();
 
 app.listen(config.PORT, () => {
   console.log(`Backend running at http://localhost:${config.PORT}`);
   console.log(`Health check:      http://localhost:${config.PORT}/health`);
+  // Start the no-reply fallback sweeper (checks idle waiting conversations).
+  startFallbackSweeper();
 });

@@ -17,7 +17,8 @@ import ReactFlow, {
 import "reactflow/dist/style.css";
 import { WorkFlowNode } from "./workflow.Node";
 import { TestPanel } from "./testPanel";
-import { VariableTextInput, VariableSelect } from "./VariableInputs";
+import { VariableTextInput, VariableSelect, NoReplyFallback } from "./VariableInputs";
+import { layoutGraph } from "./autoLayout";
 
 // Map React Flow node type name -> our custom component.
 const nodeTypes = { workflow: WorkFlowNode };
@@ -139,9 +140,17 @@ function BuilderInner() {
   const rfRef = useRef<ReactFlowInstance | null>(null);
 
   const onConnect = useCallback(
-    (connection: Connection) => setEdges((eds) => addEdge(connection, eds)),
+    (connection: Connection) => setEdges((eds) => addEdge({ ...connection, type: "smoothstep" }, eds)),
     [setEdges]
   );
+
+  // Auto-layout the graph into a clean tree using dagre (#tree layout).
+  const autoLayout = useCallback((direction: "TB" | "LR") => {
+    const laid = layoutGraph(nodes, edges, direction);
+    setNodes(laid);
+    // Re-fit after positions update.
+    setTimeout(() => rfRef.current?.fitView({ duration: 600, padding: 0.2 }), 50);
+  }, [nodes, edges, setNodes]);
 
   // ---------------------- FOCUS A NODE (#4/#6/#14) ----------------------
   const focusNode = useCallback((id: string) => {
@@ -481,7 +490,10 @@ function BuilderInner() {
     nodes.forEach((n) => { nameById[n.id] = nodeName(n); });
 
     return nodes.map((n) => {
-      const isChoice = n.data.nodeType === "BUTTONS" || n.data.nodeType === "LIST";
+      const isChoice =
+        n.data.nodeType === "BUTTONS" ||
+        n.data.nodeType === "LIST" ||
+        n.data.nodeType === "SEND_MESSAGE";
       let optionTargets: Record<string, string> = {};
       if (isChoice) {
         const outEdges = edges.filter((e) => e.source === n.id);
@@ -500,6 +512,37 @@ function BuilderInner() {
       };
     });
   }, [nodes, edges, searchHighlightId, nodeName, deleteNode]);
+
+  // Decorate edges with a label = the source option's text (button/list row),
+  // so a viewer can tell which button/branch an edge originates from (#15).
+  const edgesForFlow = useMemo(() => {
+    // Build sourceHandle -> label lookups per node.
+    const labelFor = (nodeId: string, handle: string | null | undefined): string | undefined => {
+      if (!handle) return undefined;
+      const node = nodes.find((n) => n.id === nodeId);
+      if (!node) return undefined;
+      const cfg = node.data.config ?? {};
+      // Branch handles have fixed labels.
+      if (handle === "true") return node.data.nodeType === "VALIDATE" ? "pass" : node.data.nodeType === "API_REQUEST" ? "success" : "true";
+      if (handle === "else") return node.data.nodeType === "VALIDATE" ? "fail" : node.data.nodeType === "API_REQUEST" ? "failure" : "else";
+      // Option handles: match against buttons/rows.
+      const opts = [...(cfg.buttons ?? []), ...(cfg.rows ?? [])];
+      const opt = opts.find((o: any) => o.id === handle);
+      return opt?.label || undefined;
+    };
+    return edges.map((e) => {
+      const label = labelFor(e.source, e.sourceHandle);
+      return {
+        ...e,
+        type: e.type ?? "smoothstep",
+        label,
+        labelStyle: { fontSize: 10, fontWeight: 600, fill: "#475569" },
+        labelBgStyle: { fill: "#fff", fillOpacity: 0.9 },
+        labelBgPadding: [4, 2] as [number, number],
+        labelBgBorderRadius: 4,
+      };
+    });
+  }, [edges, nodes]);
 
   // ---------------------- #14: search matches ----------------------
   const searchMatches = useMemo(() => {
@@ -544,6 +587,7 @@ function BuilderInner() {
           source: edge.source,
           target: edge.target,
           sourceHandle: edge.sourceHandle ?? undefined,
+          type: "smoothstep",
         }));
 
         api.get(`/api/chatbots/${chatbotId}`)
@@ -608,6 +652,16 @@ function BuilderInner() {
               API Configs ({apiConfigs.length})
             </button>
 
+            {/* Auto-layout: arrange nodes into a clean tree */}
+            <div className="join">
+              <button onClick={() => autoLayout("TB")} className="btn btn-sm btn-outline join-item" title="Arrange vertically">
+                ⬇ Vertical
+              </button>
+              <button onClick={() => autoLayout("LR")} className="btn btn-sm btn-outline join-item" title="Arrange horizontally">
+                ➡ Horizontal
+              </button>
+            </div>
+
             {/* #14 — node search */}
             <div className="relative ml-auto">
               <input
@@ -662,13 +716,14 @@ function BuilderInner() {
         <div className="flex-1">
           <ReactFlow
             nodes={nodesForFlow}
-            edges={edges}
+            edges={edgesForFlow}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
             onNodeClick={onNodeClick}
             onEdgeClick={onEdgeClick}
             nodeTypes={nodeTypes}
+            defaultEdgeOptions={{ type: "smoothstep" }}
             onInit={(inst) => { rfRef.current = inst; }}
             fitView
           >
@@ -886,6 +941,17 @@ function BuilderInner() {
                   />
                 </label>
                 <label className="form-control">
+                  <span className="label-text">Footer (optional)</span>
+                  <VariableTextInput
+                    value={selectedNode.data.config.footer ?? ""}
+                    onChange={(v) => updateConfig("footer", v)}
+                    variables={variables}
+                    onCreateVariable={ensureVariable}
+                    singleLine
+                    placeholder="Footer text…"
+                  />
+                </label>
+                <label className="form-control">
                   <span className="label-text">Save answer to variable</span>
                   <VariableSelect
                     value={selectedNode.data.config.variable ?? ""}
@@ -894,6 +960,82 @@ function BuilderInner() {
                     onCreateVariable={ensureVariable}
                   />
                 </label>
+
+                {/* Validation */}
+                <label className="form-control">
+                  <span className="label-text">Validation type</span>
+                  <select
+                    className="select select-bordered select-sm"
+                    value={selectedNode.data.config.validationType ?? "none"}
+                    onChange={(e) => updateConfig("validationType", e.target.value)}
+                  >
+                    <option value="none">None</option>
+                    <option value="phone">Phone number</option>
+                    <option value="email">Email</option>
+                    <option value="url">URL</option>
+                    <option value="number">Only numbers</option>
+                    <option value="alphanumeric">Alphanumeric</option>
+                    <option value="custom">Custom (regex)</option>
+                  </select>
+                </label>
+                {selectedNode.data.config.validationType === "custom" && (
+                  <label className="form-control">
+                    <span className="label-text">Regex expression</span>
+                    <input
+                      className="input input-bordered input-sm font-mono"
+                      placeholder="^[A-Za-z0-9]+$"
+                      value={selectedNode.data.config.regex ?? ""}
+                      onChange={(e) => updateConfig("regex", e.target.value)}
+                    />
+                    <span className="text-[11px] text-base-content/50 mt-1">
+                      Examples — Phone: <code>^\+?[0-9]{"{10,15}"}$</code> · Email: <code>^[^\s@]+@[^\s@]+\.[^\s@]+$</code> · URL: <code>^https?:\/\/.+$</code>
+                    </span>
+                  </label>
+                )}
+
+                {/* Retry + failure (only relevant when validating) */}
+                {selectedNode.data.config.validationType &&
+                  selectedNode.data.config.validationType !== "none" && (
+                    <>
+                      <label className="form-control">
+                        <span className="label-text">Retry limit (max 5)</span>
+                        <input
+                          type="number"
+                          min={1}
+                          max={5}
+                          className="input input-bordered input-sm w-24"
+                          value={selectedNode.data.config.retryLimit ?? 3}
+                          onChange={(e) => {
+                            const n = Math.max(1, Math.min(5, Number(e.target.value) || 1));
+                            updateConfig("retryLimit", n);
+                          }}
+                        />
+                        <span className="text-[11px] text-base-content/50 mt-1">
+                          After this many failed attempts, the failure message is shown and the flow continues.
+                        </span>
+                      </label>
+                      <label className="form-control">
+                        <span className="label-text">Failure / invalid message</span>
+                        <VariableTextInput
+                          value={selectedNode.data.config.failureMessage ?? ""}
+                          onChange={(v) => updateConfig("failureMessage", v)}
+                          variables={variables}
+                          onCreateVariable={ensureVariable}
+                          placeholder="That doesn't look valid. Please try again."
+                        />
+                      </label>
+                    </>
+                  )}
+
+                {/* No-response timeout fallback */}
+                <NoReplyFallback
+                  node={selectedNode}
+                  otherNodes={otherNodes}
+                  nodeName={nodeName}
+                  updateConfig={updateConfig}
+                  variables={variables}
+                  onCreateVariable={ensureVariable}
+                />
               </>
             )}
 
@@ -1148,6 +1290,16 @@ function BuilderInner() {
                     placeholder="That doesn't look right. Try again."
                   />
                 </label>
+
+                {/* No-response timeout fallback */}
+                <NoReplyFallback
+                  node={selectedNode}
+                  otherNodes={otherNodes}
+                  nodeName={nodeName}
+                  updateConfig={updateConfig}
+                  variables={variables}
+                  onCreateVariable={ensureVariable}
+                />
               </>
             )}
 

@@ -82,8 +82,13 @@ export function validateWorkflow(def: WorkflowDefinition): ValidationResult {
         if (!nodeIds.has(edge.target)) push(`A connection has an unknown target node.`, edge.target)
     }
 
-    // 4. No orphan nodes: every node except START must have an incoming edge
+    // 4. No orphan nodes: every node except START must be reachable — either
+    //    via an incoming edge, or as a no-reply fallback target (#fallback).
     const targeted = new Set(edges.map((edge) => edge.target))
+    for (const node of nodes) {
+        const fbTarget = (node.config as any)?.fallback?.goToNodeId
+        if (fbTarget) targeted.add(fbTarget)
+    }
     for (const node of nodes) {
         if (node.nodeType !== "START" && !targeted.has(node.id)) {
             push(`"${nodeName(node)}" is not connected to anything.`, node.id)

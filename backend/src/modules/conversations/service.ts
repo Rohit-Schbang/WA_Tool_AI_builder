@@ -105,6 +105,12 @@ export async function handleInboundMessage(
        // 3. Build the execution context from saved state.
     const variables = (conversation.variables as Record<string, any>) ?? {};
 
+    // The user replied, so clear any no-reply fallback "fired" flags — if the
+    // flow waits again at any node later, its fallback should be eligible anew.
+    for (const key of Object.keys(variables)) {
+        if (key.startsWith("__fallbackFired_")) delete variables[key];
+    }
+
     // Wrap the messaging adapter so every outbound message is logged.
     const loggingMessaging = new LoggingAdapter(messaging, conversation.id);
 

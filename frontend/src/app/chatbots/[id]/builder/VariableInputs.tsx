@@ -160,6 +160,89 @@ export function VariableTextInput({
 }
 
 // ---------------------------------------------------------------------------
+// NoReplyFallback — configure a no-response timeout on a waiting node:
+//   - enable + timeout minutes (max 10)
+//   - fallback message (optional)
+//   - go-to node (optional): route the flow onward on timeout
+// Stored under config.fallback = { enabled, minutes, message, goToNodeId }.
+// ---------------------------------------------------------------------------
+export function NoReplyFallback({
+  node,
+  otherNodes,
+  nodeName,
+  updateConfig,
+  variables,
+  onCreateVariable,
+}: {
+  node: any;
+  otherNodes: any[];
+  nodeName: (n: any) => string;
+  updateConfig: (key: string, value: any) => void;
+  variables: WorkflowVariable[];
+  onCreateVariable: (name: string) => void;
+}) {
+  const fb = node.data.config.fallback ?? {};
+  const setFb = (patch: Record<string, any>) =>
+    updateConfig("fallback", { ...fb, ...patch });
+
+  return (
+    <div className="border-t border-base-200 pt-2 mt-1">
+      <label className="label cursor-pointer justify-start gap-2 py-1">
+        <input
+          type="checkbox"
+          className="checkbox checkbox-sm"
+          checked={!!fb.enabled}
+          onChange={(e) => setFb({ enabled: e.target.checked })}
+        />
+        <span className="label-text font-medium">No-reply fallback</span>
+      </label>
+      {fb.enabled && (
+        <div className="flex flex-col gap-2 pl-1">
+          <label className="form-control">
+            <span className="label-text">If no reply within (minutes, max 10)</span>
+            <input
+              type="number"
+              min={1}
+              max={10}
+              className="input input-bordered input-sm w-24"
+              value={fb.minutes ?? 5}
+              onChange={(e) => {
+                const n = Math.max(1, Math.min(10, Number(e.target.value) || 1));
+                setFb({ minutes: n });
+              }}
+            />
+          </label>
+          <label className="form-control">
+            <span className="label-text">Fallback message (optional)</span>
+            <VariableTextInput
+              value={fb.message ?? ""}
+              onChange={(v) => setFb({ message: v })}
+              variables={variables}
+              onCreateVariable={onCreateVariable}
+              singleLine
+              placeholder="Are you still there?"
+            />
+          </label>
+          <label className="form-control">
+            <span className="label-text">Then go to node (optional)</span>
+            <select
+              className="select select-bordered select-sm"
+              value={fb.goToNodeId ?? ""}
+              onChange={(e) => setFb({ goToNodeId: e.target.value })}
+            >
+              <option value="">Stay / end here</option>
+              {otherNodes.map((n) => (
+                <option key={n.id} value={n.id}>{nodeName(n)}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // VariableSelect — pick an existing variable to store into, or create a new
 // one inline. Used for "store answer in variable" style fields.
 // ---------------------------------------------------------------------------
