@@ -1,6 +1,6 @@
 import { prisma } from "../../infra/prisma.js"
 import type { Prisma } from "@prisma/client"
-import { validateWorkflow, ValidationResult } from "./validator.js"
+import { validateWorkflow, ValidationResult, ValidationError } from "./validator.js"
 import { ExecutionContext, WorkflowDefinition } from "../runtime/types.js";
 import { ConsoleAdapter } from "../messaging/adapters.js";
 import { runEngine } from "../runtime/engine.js";
@@ -49,10 +49,10 @@ export async function getMaxVersion(chatbotId: string): Promise<number> {
     return latest?.version ?? 0
 }
 
-// Result of pulish attempt
+// Result of publish attempt
 export interface PublishResult {
     ok: boolean;
-    errors?: string[];
+    errors?: ValidationError[];
     version?: number
 }
 
@@ -108,7 +108,7 @@ export async function testStep(
 export async function publishDraft(chatbotId: string): Promise<PublishResult> {
 
     const draft = await getDraft(chatbotId)
-    if (!draft) return { ok: false, errors: ["No draft topublish"] }
+    if (!draft) return { ok: false, errors: [{ message: "No draft to publish" }] }
 
 
     // The definiion is stored as JSON; cast it to the shape the validators excepts

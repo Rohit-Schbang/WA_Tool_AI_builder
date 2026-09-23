@@ -5,8 +5,51 @@
 > file is the detailed technical companion — what each piece actually does,
 > how it works, and any decisions/gotchas worth remembering.
 
-**Last updated:** Sep 17, 2026
-**Current phase:** V2.1 — Feature Expansion (Contacts)
+**Last updated:** Sep 22, 2026
+**Current phase:** Manager Change Request — Builder overhaul (Batch A done, Batch B next)
+
+---
+
+## Manager Change Request — Builder overhaul (Sep 22, 2026)
+
+Mid-roadmap add-on: 16 builder/engine enhancements requested by management,
+grouped into batches by risk/scope. Building with end-to-end testing per feature.
+
+### Batch A — Builder UX (done, Sep 22)
+All frontend, in `frontend/src/app/chatbots/[id]/builder/` (`page.tsx` + `workflow.Node.tsx`),
+plus one backend validator change.
+
+- **#8 Remove End node.** `END` dropped from the palette `NODE_TYPES`. Validator
+  (`backend/src/modules/workflows/validator.ts`) no longer requires an END node;
+  instead it requires at least one node after START. A flow now terminates
+  naturally at any node with no outgoing edge. Existing workflows with END nodes
+  still load and render (the type is kept in the node component's title map).
+- **#3 Editable node names.** Each node has `config.name`. Default auto-generated
+  (`Send Message 1`). Edited via a "Node name" field at the top of the side
+  panel; the node card shows the custom name (falls back to `<Type> <seq>`).
+  (First tried an inline pencil-edit on the card, but reverted to the side-panel
+  field per the user's preference.)
+- **#4 Auto-focus on add.** `addNode` places the node near the current viewport
+  center (`rf.screenToFlowPosition`), auto-selects it, and pans/zooms to center
+  it via `ReactFlowInstance.setCenter`. Builder is now wrapped in
+  `ReactFlowProvider` so the instance is available.
+- **#6 Connect to node.** A "Connect to node" dropdown in the panel wires an edge
+  from the selected node to the chosen target. Only shown for single-output
+  nodes; hidden for Condition/Validate/Buttons/List (they branch via their own
+  labeled handles, so a single "connect" would be ambiguous). Avoids duplicate
+  edges.
+- **#13 Delay max timeout.** WAIT node seconds clamped to `MAX_DELAY_SECONDS`
+  (86400 = 24h), with the max shown in the field label + helper text.
+- **#14 Node search.** Search box in the toolbar matches by node name, type, or
+  id; clicking a result pans/zooms to the node and highlights it with a yellow
+  ring for 2s (`searchHighlight` flag on node data).
+- **#15 Connected node for options.** For BUTTONS/LIST, an `optionTargets` map
+  (optionId → target node name) is computed in the `nodesForFlow` memo from the
+  edges and injected into node data. Shown on the card under each option
+  (`→ Name` in green, or "Not Connected" in grey) and in the config panel.
+
+Verified: backend `tsc --noEmit` clean, frontend no diagnostics, builder page
+serves 200 and compiles in the dev server.
 
 ---
 
@@ -267,14 +310,30 @@ first). Full comparison table and reasoning discussed Sep 17.
 
 ### V2.1 — Quick wins + Contacts (Sep 18–23)
 - [x] In-builder Activate toggle (Sep 18)
-- [ ] Contacts model + CRUD API — **in progress**. Model + migration done
-      (`Contact` table live). Service (`backend/src/modules/contacts/service.ts`)
-      done: `createContact`, `listContacts`, `updateContact`, `deleteContact`,
-      all scoped by `ownerId`. Routes (`backend/src/modules/contacts/routes.ts`)
-      done and mounted at `/api/contacts` (top-level, not nested under a
-      chatbot, since contacts belong to the user). Verified compiling; next
-      step is a live end-to-end test against the database.
-- [ ] Contacts frontend page (list/add/edit/delete/import)
+- [x] Contacts model + CRUD API (Sep 18). `Contact` table migrated. Service
+      (`backend/src/modules/contacts/service.ts`): `createContact`,
+      `listContacts`, `updateContact`, `deleteContact`, all scoped by
+      `ownerId`. Routes (`backend/src/modules/contacts/routes.ts`) mounted at
+      `/api/contacts` (top-level, not nested under a chatbot, since contacts
+      belong to the user, not a bot). Verified live end-to-end against the
+      database: create, duplicate-phone rejection (409), list, update,
+      delete, delete-again (404) — all behave correctly.
+  - **Bugs found & fixed during testing:** the PATCH and DELETE routes were
+    both registered on path `"/"` instead of `"/:id"`, so `PATCH/DELETE
+    /api/contacts/<id>` fell through to the global 404 handler instead of
+    matching. Also cleaned up unreachable dead code (a `console.error` +
+    `return` after the try/catch in the POST handler that could never run)
+    and an unused import.
+- [x] Contacts frontend page (Sep 18). `frontend/src/app/contacts/page.tsx` —
+      top-level page (like `/chatbots`): create form (name, phone,
+      comma-separated tags, optional notes), card list with tag badges,
+      prompt-based quick edit (matches the existing chatbot "Rename" pattern),
+      delete with confirm. Duplicate-phone (409) errors surface inline in the
+      form. Cross-linked with `/chatbots` via nav links both ways. CSV import
+      was scoped out of this pass — plain CRUD shipped first; import can be
+      added later as its own small task if needed.
+
+**V2.1 complete (Sep 18, 2026).**
 
 ### V2.2 — Templates + AI node (Sep 24–30, planned)
 - [ ] Meta-approved WhatsApp template management (CRUD + approval sync + send)

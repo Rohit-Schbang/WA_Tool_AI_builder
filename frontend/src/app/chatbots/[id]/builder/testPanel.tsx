@@ -4,10 +4,14 @@ import { useState } from "react";
 import { api } from "@/lib/api";
 
 interface Option { id: string; label: string; }
+interface Media { type: "image" | "document" | "video"; url: string; }
+interface Cta { label: string; url: string; }
 interface ChatMessage {
   from: "user" | "bot";
   text: string;
   options?: Option[];
+  media?: Media;
+  cta?: Cta;
 }
 
 // A floating chat widget that tests the PUBLISHED flow via the real
@@ -52,6 +56,8 @@ export function TestPanel({ chatbotId }: { chatbotId: string }) {
         from: "bot" as const,
         text: r.text,
         options: r.options,
+        media: r.media,
+        cta: r.cta,
       }));
 
       // Never go silently blank — tell the user if nothing came back.
@@ -125,8 +131,30 @@ export function TestPanel({ chatbotId }: { chatbotId: string }) {
           <div className="flex-1 overflow-y-auto p-3 space-y-2 bg-base-200">
             {messages.map((m, i) => (
               <div key={i} className={`chat ${m.from === "user" ? "chat-end" : "chat-start"}`}>
-                <div className={`chat-bubble ${m.from === "user" ? "chat-bubble-primary" : ""} text-sm`}>
-                  {m.text}
+                <div className={`chat-bubble ${m.from === "user" ? "chat-bubble-primary" : ""} text-sm max-w-[85%]`}>
+                  {/* #12 — media header preview */}
+                  {m.media?.type === "image" && (
+                    <img src={m.media.url} alt="" className="rounded mb-1 max-h-40 object-contain"
+                      onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                  )}
+                  {m.media?.type === "video" && (
+                    <video src={m.media.url} controls className="rounded mb-1 max-h-40 w-full" />
+                  )}
+                  {m.media?.type === "document" && (
+                    <a href={m.media.url} target="_blank" rel="noreferrer" className="flex items-center gap-1 underline mb-1 break-all">
+                      📄 {m.media.url.split("/").pop() || "Document"}
+                    </a>
+                  )}
+
+                  {m.text && <div className="whitespace-pre-line">{m.text}</div>}
+
+                  {/* #10 — CTA URL button */}
+                  {m.cta && (
+                    <a href={m.cta.url} target="_blank" rel="noreferrer"
+                      className="btn btn-xs btn-outline mt-2 w-full">
+                      🔗 {m.cta.label}
+                    </a>
+                  )}
                 </div>
               </div>
             ))}

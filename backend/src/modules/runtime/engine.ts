@@ -97,5 +97,4 @@ export async function runEngine(def: WorkflowDefinition, StartNodeId: string, co
 
     }
     return { pausedAtNodeId: null, status: "completed" }
-
 }

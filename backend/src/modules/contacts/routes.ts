@@ -2,7 +2,6 @@ import { Request, Response, Router } from "express";
 import { requireAuth } from "../auth/middleware";
 import z from "zod";
 import { createContact, deleteContact, listContacts, updateContact } from "./service";
-import { error } from "console";
 
 
 export const contactsRouter = Router()
@@ -37,15 +36,14 @@ contactsRouter.post("/", async (req: Request, res: Response) => {
 
     } catch (error: any) {
         if (error.code === "P2002") return res.status(409).json({ error: "A contact with same phone exists" })
-        res.send(500).json({ error: "internal server error" })
+        console.error("Create Contact Error:", error)
+        return res.status(500).json({ error: "Internal Server error" })
     }
-    console.error("Create Contact Error: " + error)
-    return res.status(500).json({ "error": "Internal Server error" })
 })
 
 // PATCH / api/ contacts/:id  ----------->>>> Updating a contact
 
-contactsRouter.patch("/", async (req: Request, res: Response) => {
+contactsRouter.patch("/:id", async (req: Request, res: Response) => {
 
     const parsed = contactSchema.safeParse(req.body)
 
@@ -60,7 +58,7 @@ contactsRouter.patch("/", async (req: Request, res: Response) => {
 
 // DELETE / api/ contacts/:id  ----------->>>> Deletion of contact
 
-contactsRouter.delete("/", async (req: Request, res: Response) => {
+contactsRouter.delete("/:id", async (req: Request, res: Response) => {
 
     const deleted = await deleteContact(req.userId!, req.params.id)
     if (!deleted) return res.status(404).json({ error: "Contact not found" })

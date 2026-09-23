@@ -91,6 +91,6 @@ workflowsRouter.post("/test", async (req: Request, res: Response) => {
 
   return res.json({
     status: result.status,
-    replies: adapter.sent.map((m) => ({ text: m.text, options: m.options })),
+    replies: adapter.sent.map((m) => ({ text: m.text, options: m.options, media: m.media, cta: m.cta })),
   });
 });

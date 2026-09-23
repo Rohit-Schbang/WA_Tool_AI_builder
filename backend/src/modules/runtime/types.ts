@@ -15,14 +15,26 @@ export interface WorkFlowEdge {
     sourceHandle: string | null
 }
 
-export interface WorkflowDefinition {
-    nodes: WorkflowNode[];
-    edges: WorkFlowEdge[]
+// A declared workflow-level variable (#2).
+export interface WorkflowVariable {
+    name: string;
+    type: "text" | "number" | "boolean";
+    default: string;
 }
 
-// The runtine calls this ; the Whatsapp adapter implements this; The runtime does NOT know Whatsapp exists.
-export interface MessagingAdapter {
-    sendText(to: string, from: string): Promise<void>
+// A reusable global API configuration (#1) that API_REQUEST nodes reference
+// by name, so base URL + shared headers aren't repeated per node.
+export interface ApiConfig {
+    name: string;
+    baseUrl?: string;
+    headers?: { key: string; value: string }[];
+}
+
+export interface WorkflowDefinition {
+    variables?: WorkflowVariable[];
+    apiConfigs?: ApiConfig[];
+    nodes: WorkflowNode[];
+    edges: WorkFlowEdge[]
 }
 
 // The execution context passed to every executor
@@ -37,12 +49,28 @@ export interface ExecutionContext {
     incomingText: string | null
     // --------------->>>>>>            How  the runtime sends message out
     messaging: MessagingAdapter
+    // #1 — global API configs keyed by name (for API_REQUEST nodes).
+    apiConfigs?: Record<string, ApiConfig>
 }
 
 // An option for interactive messages (button or list row).
 export interface MessageOption {
   id: string;
   label: string;
+}
+
+// A rich message header (#12). WhatsApp supports a text header or a single
+// media header (image/document/video). `value` is the text or the media URL.
+export interface MessageHeader {
+  type: "text" | "image" | "document" | "video";
+  value: string;
+}
+
+// A structured message body for the SEND_MESSAGE node (#12).
+export interface RichMessage {
+  header?: MessageHeader;
+  body: string;
+  footer?: string;
 }
 
 // The channel-agnostic messaging contract (ADR-007).
@@ -52,6 +80,10 @@ export interface MessagingAdapter {
   // executors fall back to sendText when they're absent.
   sendButtons?(to: string, text: string, buttons: MessageOption[]): Promise<void>;
   sendList?(to: string, text: string, buttonText: string, rows: MessageOption[]): Promise<void>;
+  // #12 — a message with optional header (text/media) and footer.
+  sendRichMessage?(to: string, msg: RichMessage): Promise<void>;
+  // #10 — a call-to-action URL button (opens a link in WhatsApp).
+  sendCtaUrl?(to: string, text: string, buttonText: string, url: string, footer?: string): Promise<void>;
 }
 
 

@@ -1,5 +1,5 @@
 import { prisma } from "../../infra/prisma.js";
-import type { MessagingAdapter, MessageOption } from "../runtime/types.js";
+import type { MessagingAdapter, MessageOption, RichMessage } from "../runtime/types.js";
 
 // Wraps a real MessagingAdapter and logs every outbound message to the DB
 // (as an OUTBOUND Message row) before delegating to the wrapped adapter.
@@ -40,6 +40,24 @@ export class LoggingAdapter implements MessagingAdapter {
       await this.inner.sendList(to, text, buttonText, rows);
     } else {
       await this.inner.sendText(to, text);
+    }
+  }
+
+  async sendRichMessage(to: string, msg: RichMessage): Promise<void> {
+    await this.log("rich", { ...msg });
+    if (this.inner.sendRichMessage) {
+      await this.inner.sendRichMessage(to, msg);
+    } else {
+      await this.inner.sendText(to, msg.body);
+    }
+  }
+
+  async sendCtaUrl(to: string, text: string, buttonText: string, url: string, footer?: string): Promise<void> {
+    await this.log("cta_url", { text, buttonText, url, footer });
+    if (this.inner.sendCtaUrl) {
+      await this.inner.sendCtaUrl(to, text, buttonText, url, footer);
+    } else {
+      await this.inner.sendText(to, `${text}\n${buttonText}: ${url}`);
     }
   }
 }

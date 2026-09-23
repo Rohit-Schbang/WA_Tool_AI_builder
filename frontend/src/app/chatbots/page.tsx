@@ -103,6 +103,7 @@ export default function ChatbotsPage() {
                         <span className="text-xl">💬</span> WA AI Tool
                     </Link>
                 </div>
+                <Link href="/contacts" className="btn btn-ghost btn-sm">Contacts</Link>
                 <button onClick={handleLogout} className="btn btn-ghost btn-sm">Log out</button>
             </nav>
 

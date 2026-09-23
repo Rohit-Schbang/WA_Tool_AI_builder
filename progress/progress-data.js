@@ -105,19 +105,64 @@ const PLAN = [
     days: "Sep 18–23",
     tasks: [
       { title: "In-builder activate toggle (publish → activate → test loop)  · 0.5d", day: "Day 17", date: "Sep 18, 2026", status: "done" },
-      { title: "Contacts model + CRUD API (name, phone, tags)  · 1.5d", day: "Day 17", date: "", status: "active" },
-      { title: "Contacts frontend page (list/add/edit/delete/import)  · 1.5d", day: "Day 18", date: "", status: "todo" },
+      { title: "Contacts model + CRUD API (name, phone, tags)  · 1.5d", day: "Day 17", date: "Sep 18, 2026", status: "done" },
+      { title: "Contacts frontend page (list/add/edit/delete/import)  · 1.5d", day: "Day 18", date: "Sep 18, 2026", status: "done" },
     ],
   },
   {
     name: "V2.2 — Templates + AI node",
     days: "Sep 24–30",
     tasks: [
+      { title: "AI response node: executor + provider integration (Gemini)  · 2d", day: "Day 22", date: "Sep 22, 2026", status: "done" },
+      { title: "AI node builder UI + config (prompt, variable, fallback, send toggle)  · 1d", day: "Day 23", date: "Sep 22, 2026", status: "done" },
       { title: "Template model + Meta template CRUD + approval status sync  · 2d", day: "Day 19", date: "", status: "todo" },
       { title: "Send template via WhatsApp adapter (outside 24h window)  · 1d", day: "Day 20", date: "", status: "todo" },
       { title: "Template management UI  · 1d", day: "Day 21", date: "", status: "todo" },
-      { title: "AI response node: executor + provider integration (OpenAI)  · 2d", day: "Day 22", date: "", status: "todo" },
-      { title: "AI node builder UI + config (prompt, provider, variable)  · 1d", day: "Day 23", date: "", status: "todo" },
+    ],
+  },
+
+  // ===================== MANAGER CHANGE REQUEST (Builder overhaul) =====================
+  // Add-on requested mid-roadmap: 16 builder/engine enhancements. Grouped into
+  // batches by risk/scope. Building today with end-to-end testing per feature.
+  {
+    name: "V2.CR Batch A — Builder UX",
+    days: "Sep 22",
+    tasks: [
+      { title: "#8 Remove End node (palette + validator no longer requires it)", day: "CR", date: "Sep 22, 2026", status: "done" },
+      { title: "#3 Editable node names (side-panel name field, shown on card)", day: "CR", date: "Sep 22, 2026", status: "done" },
+      { title: "#4 Auto-focus + select node when added (pan/zoom to new node)", day: "CR", date: "Sep 22, 2026", status: "done" },
+      { title: "#6 Connect-to-node dropdown (wires edge to chosen node)", day: "CR", date: "Sep 22, 2026", status: "done" },
+      { title: "#13 Delay node max timeout (clamp to 86400s, shown in UI)", day: "CR", date: "Sep 22, 2026", status: "done" },
+      { title: "#14 Node search + auto-focus (search by name/type/id, jump+highlight)", day: "CR", date: "Sep 22, 2026", status: "done" },
+      { title: "#15 Show connected node for buttons/list options (card + panel)", day: "CR", date: "Sep 22, 2026", status: "done" },
+    ],
+  },
+  {
+    name: "V2.CR Batch B — Builder + schema",
+    days: "Sep 22",
+    tasks: [
+      { title: "#2 Workflow Variables (modal add/view: name, type, default; seeded at runtime)", day: "CR", date: "Sep 22, 2026", status: "done" },
+      { title: "#16 Start node keywords & trigger conditions (contains/exact/starts_with)", day: "CR", date: "Sep 22, 2026", status: "done" },
+      { title: "#12 Send Message header/body/footer + media preview (builder + test chat)", day: "CR", date: "Sep 22, 2026", status: "done" },
+      { title: "#10 Buttons in Send Message: CTA (branch) or Visit URL (link); Buttons node removed", day: "CR", date: "Sep 22, 2026", status: "done" },
+    ],
+  },
+  {
+    name: "V2.CR Batch C — New nodes + engine",
+    days: "Sep 23+",
+    tasks: [
+      { title: "#5 Input Type node (text/number/email/phone/media/location + validation)", day: "CR", date: "", status: "todo" },
+      { title: "#7.1 Validation code node (JS expression / regex, pass/fail paths)", day: "CR", date: "", status: "todo" },
+      { title: "#7.2 Transform code node (JS variable manipulation → output var)", day: "CR", date: "", status: "todo" },
+      { title: "#9 API node (methods, headers, query, body, response mapping) + timeout", day: "CR", date: "", status: "todo" },
+      { title: "#1 Global API integration/config (workflow-level, reusable in API nodes)", day: "CR", date: "", status: "todo" },
+    ],
+  },
+  {
+    name: "V2.CR Batch D — Infrastructure",
+    days: "Sep 23+",
+    tasks: [
+      { title: "#11 Auto-save (localStorage immediate + DB sync every 30s, change-detect + retry)", day: "CR", date: "", status: "todo" },
     ],
   },
   {
