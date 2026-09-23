@@ -33,7 +33,6 @@ const NODE_TYPES = [
   "CONDITION",
   "AI_RESPONSE",
   "SET_VARIABLE",
-  "VALIDATE",
   "TRANSFORM",
   "API_REQUEST",
   "WAIT",
@@ -68,8 +67,7 @@ const TYPE_LABEL: Record<string, string> = {
   CONDITION: "If / Else",
   AI_RESPONSE: "AI Reply",
   SET_VARIABLE: "Set Variable",
-  VALIDATE: "Validate",
-  TRANSFORM: "Transform",
+  TRANSFORM: "Custom Code",
   API_REQUEST: "API Request",
   WAIT: "Delay",
 };
@@ -77,11 +75,50 @@ const TYPE_LABEL: Record<string, string> = {
 // #13 — maximum delay a WAIT node may specify (in seconds). 24h.
 const MAX_DELAY_SECONDS = 86400;
 
+// Palette grouping for the node library sidebar. Every entry still calls
+// addNode(type); this only organises the existing NODE_TYPES into sections
+// and gives each a Phosphor-ish icon + accent color to match the new design.
+const PALETTE_GROUPS: {
+  label: string;
+  items: { type: WorkflowNodeType; icon: string; accent: string }[];
+}[] = [
+  {
+    label: "Triggers & Input",
+    items: [
+      { type: "ASK_INPUT", icon: "ph-chat-circle-dots", accent: "bg-emerald-100 text-emerald-700" },
+      { type: "INPUT_TYPE", icon: "ph-keyboard", accent: "bg-emerald-100 text-emerald-700" },
+    ],
+  },
+  {
+    label: "Messages & AI",
+    items: [
+      { type: "SEND_MESSAGE", icon: "ph-paper-plane-right", accent: "bg-blue-100 text-blue-700" },
+      { type: "AI_RESPONSE", icon: "ph-sparkle", accent: "bg-indigo-100 text-indigo-700" },
+      { type: "LIST", icon: "ph-list-bullets", accent: "bg-sky-100 text-sky-700" },
+    ],
+  },
+  {
+    label: "Routing & Logic",
+    items: [
+      { type: "CONDITION", icon: "ph-git-fork", accent: "bg-amber-100 text-amber-700" },
+      { type: "WAIT", icon: "ph-clock-countdown", accent: "bg-amber-100 text-amber-700" },
+    ],
+  },
+  {
+    label: "Data & Integrations",
+    items: [
+      { type: "SET_VARIABLE", icon: "ph-database", accent: "bg-purple-100 text-purple-700" },
+      { type: "TRANSFORM", icon: "ph-arrows-left-right", accent: "bg-purple-100 text-purple-700" },
+      { type: "API_REQUEST", icon: "ph-cloud-arrow-up", accent: "bg-rose-100 text-rose-700" },
+    ],
+  },
+];
+
 // Nodes that branch via their own labeled handles (per-option or true/else),
 // so a plain "Connect to node" would be ambiguous for them. Send Message is
 // multi-output only when it has reply buttons configured (#10).
 function isMultiOutput(node: { nodeType: string; config?: any }) {
-  if (["CONDITION", "VALIDATE", "API_REQUEST", "LIST"].includes(node.nodeType)) return true;
+  if (["CONDITION", "API_REQUEST", "LIST"].includes(node.nodeType)) return true;
   // Send Message is multi-output only when it has CTA (branching) buttons.
   if (node.nodeType === "SEND_MESSAGE") {
     const ctaCount = (node.config?.buttons ?? []).filter((b: any) => (b.kind ?? "cta") === "cta").length;
@@ -119,6 +156,12 @@ function BuilderInner() {
   const [savedMsg, setSavedMsg] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
+  // Draft text for the START node's "Trigger keywords" chip input.
+  const [keywordDraft, setKeywordDraft] = useState("");
+
+  // Index of the Send Message button currently being dragged (for reordering).
+  const [dragBtnIdx, setDragBtnIdx] = useState<number | null>(null);
+
   // #14 — search box state
   const [search, setSearch] = useState("");
   const [searchHighlightId, setSearchHighlightId] = useState<string | null>(null);
@@ -132,6 +175,8 @@ function BuilderInner() {
   // #1 — workflow-level global API configs
   const [apiConfigs, setApiConfigs] = useState<ApiConfig[]>([]);
   const [showApiCfg, setShowApiCfg] = useState(false);
+  const [apiCfgSearch, setApiCfgSearch] = useState("");
+  const [revealedHeaders, setRevealedHeaders] = useState<Record<string, boolean>>({});
 
   const params = useParams();
   const chatbotId = params.id as string;
@@ -144,8 +189,13 @@ function BuilderInner() {
     [setEdges]
   );
 
+  // Current auto-layout direction, so the Vertical/Horizontal toggle can
+  // highlight the active option.
+  const [layoutDir, setLayoutDir] = useState<"TB" | "LR">("TB");
+
   // Auto-layout the graph into a clean tree using dagre (#tree layout).
   const autoLayout = useCallback((direction: "TB" | "LR") => {
+    setLayoutDir(direction);
     const laid = layoutGraph(nodes, edges, direction);
     setNodes(laid);
     // Re-fit after positions update.
@@ -192,7 +242,9 @@ function BuilderInner() {
       const center = rf.screenToFlowPosition
         ? rf.screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
         : null;
-      if (center) position = { x: center.x, y: center.y };
+      if (center && Number.isFinite(center.x) && Number.isFinite(center.y)) {
+        position = { x: center.x, y: center.y };
+      }
     }
     const newNode: Node = {
       id,
@@ -388,6 +440,28 @@ function BuilderInner() {
     );
   }
 
+  // Move an option (button/list row) from one index to another so users can
+  // drag-and-drop to reorder them.
+  function reorderOption(fromIdx: number, toIdx: number) {
+    if (fromIdx === toIdx) return;
+    setNodes((nds) =>
+      nds.map((n) => {
+        if (n.id !== selectedId) return n;
+        const key = optionsKey(n.data.nodeType);
+        const list = [...(n.data.config[key] ?? [])];
+        if (
+          fromIdx < 0 || fromIdx >= list.length ||
+          toIdx < 0 || toIdx >= list.length
+        ) {
+          return n;
+        }
+        const [moved] = list.splice(fromIdx, 1);
+        list.splice(toIdx, 0, moved);
+        return { ...n, data: { ...n.data, config: { ...n.data.config, [key]: list } } };
+      })
+    );
+  }
+
   // ---------------------- key/value list helpers (API node) ----------------------
   function addKeyValList(key: string) {
     setNodes((nds) =>
@@ -524,8 +598,8 @@ function BuilderInner() {
       if (!node) return undefined;
       const cfg = node.data.config ?? {};
       // Branch handles have fixed labels.
-      if (handle === "true") return node.data.nodeType === "VALIDATE" ? "pass" : node.data.nodeType === "API_REQUEST" ? "success" : "true";
-      if (handle === "else") return node.data.nodeType === "VALIDATE" ? "fail" : node.data.nodeType === "API_REQUEST" ? "failure" : "else";
+      if (handle === "true") return node.data.nodeType === "API_REQUEST" ? "success" : "true";
+      if (handle === "else") return node.data.nodeType === "API_REQUEST" ? "failure" : "else";
       // Option handles: match against buttons/rows.
       const opts = [...(cfg.buttons ?? []), ...(cfg.rows ?? [])];
       const opt = opts.find((o: any) => o.id === handle);
@@ -571,10 +645,13 @@ function BuilderInner() {
         const response = await api.get(`/api/chatbots/${chatbotId}/workflow/draft`);
         const def = response.data.definition;
 
-        const loadedNodes: Node[] = def.nodes.map((node: any) => ({
+        const loadedNodes: Node[] = def.nodes.map((node: any, i: number) => ({
           id: node.id,
           type: "workflow",
-          position: node.position,
+          position: {
+            x: Number.isFinite(node.position?.x) ? node.position.x : 300,
+            y: Number.isFinite(node.position?.y) ? node.position.y : 40 + i * 140,
+          },
           data: {
             nodeType: node.nodeType,
             config: node.config ?? {},
@@ -613,108 +690,208 @@ function BuilderInner() {
   const otherNodes = nodes.filter((n) => n.id !== selectedId);
 
   return (
-    <div className="flex h-screen w-screen">
-      {/* Palette */}
-      <aside className="w-52 shrink-0 bg-base-100 border-r border-base-300 p-4 overflow-y-auto">
-        <h2 className="font-bold mb-3">Nodes</h2>
-        <div className="flex flex-col gap-2">
-          {NODE_TYPES.map((t) => (
-            <button key={t} onClick={() => addNode(t)} className="btn btn-sm btn-outline justify-start">
-              + {TYPE_LABEL[t] ?? t}
+    <div className="flex flex-col h-screen w-screen bg-slate-50 font-sans text-slate-800">
+      {/* Full-width top header + toolbar (moved above the workspace) */}
+      {/* Main header row */}
+      <header className="h-14 bg-white border-b border-slate-200 px-4 flex items-center justify-between shrink-0 z-30">
+        <div className="flex items-center space-x-2 shrink-0">
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-brand-600 to-teal-400 flex items-center justify-center text-white shadow-xs">
+            <i className="ph-bold ph-chat-teardrop-dots text-base" />
+          </div>
+          <span className="font-extrabold text-slate-900 tracking-tight text-sm">PingFlow</span>
+          <span className="text-[9px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-brand-50 text-brand-700 border border-brand-200">Cloud</span>
+          <span className="text-xs font-semibold text-slate-500 ml-2 hidden md:inline">Flow Builder</span>
+        </div>
+
+        <div className="flex items-center space-x-2.5 shrink-0">
+          {/* #14 — node search */}
+          <div className="relative w-48 hidden lg:block">
+            <i className="ph ph-magnifying-glass absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search flow..."
+              className="w-full text-xs bg-slate-50 pl-7 pr-3 py-1.5 rounded-lg border border-slate-200 focus:outline-none focus:ring-1 focus:ring-brand-500 focus:border-brand-500 text-slate-700 placeholder-slate-400 transition"
+              type="text"
+            />
+            {searchMatches.length > 0 && (
+              <ul className="absolute z-40 mt-1 w-72 right-0 bg-white border border-slate-200 rounded-lg shadow-lg max-h-64 overflow-y-auto">
+                {searchMatches.map((n) => (
+                  <li key={n.id}>
+                    <button
+                      onClick={() => { goToSearchResult(n.id); setSearch(""); }}
+                      className="w-full text-left px-3 py-2 hover:bg-slate-50 text-xs"
+                    >
+                      <span className="font-medium text-slate-800">{nodeName(n)}</span>
+                      <span className="text-slate-400 ml-2 text-[10px]">{n.data.nodeType}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          <button
+            onClick={handleToggleActive}
+            disabled={activating}
+            className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold transition active:scale-95 shadow-2xs disabled:opacity-60 ${
+              isActive
+                ? "bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100"
+                : "bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100"
+            }`}
+          >
+            <span className={`w-1.5 h-1.5 rounded-full ${isActive ? "bg-amber-500" : "bg-emerald-500"} ${!isActive ? "animate-pulse" : ""}`} />
+            <span>{activating ? "..." : isActive ? "Deactivate" : "Activate"}</span>
+          </button>
+
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-slate-600 hover:text-slate-900 hover:bg-slate-50 transition active:scale-95 shadow-2xs disabled:opacity-60"
+          >
+            <i className="ph ph-floppy-disk text-slate-400 text-sm" />
+            <span>{saving ? "Saving..." : "Save Draft"}</span>
+          </button>
+
+          <button
+            onClick={handlePublish}
+            disabled={publishing}
+            className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg bg-brand-600 hover:bg-brand-700 text-xs font-semibold text-white transition active:scale-95 shadow-sm shadow-brand-600/30 disabled:opacity-60"
+          >
+            <i className="ph-bold ph-paper-plane-tilt text-xs" />
+            <span>{publishing ? "Publishing..." : "Publish"}</span>
+          </button>
+        </div>
+      </header>
+
+      {/* Secondary toolbar */}
+      <div className="h-11 bg-white/95 backdrop-blur-md border-b border-slate-200/80 px-4 flex items-center justify-between z-20 shrink-0 text-xs">
+        <div className="flex items-center space-x-3">
+          <div className="flex items-center bg-slate-100/80 p-0.5 rounded-lg border border-slate-200/70">
+            <button
+              onClick={() => autoLayout("TB")}
+              className={`px-2.5 py-1 rounded-md flex items-center space-x-1.5 transition text-xs ${
+                layoutDir === "TB"
+                  ? "bg-white font-semibold text-slate-900 shadow-2xs"
+                  : "font-medium text-slate-500 hover:text-slate-800"
+              }`}
+              title="Arrange vertically"
+            >
+              <i className={`ph-bold ph-arrows-down-up text-xs ${layoutDir === "TB" ? "text-brand-600" : "text-slate-400"}`} />
+              <span>Vertical</span>
             </button>
+            <button
+              onClick={() => autoLayout("LR")}
+              className={`px-2.5 py-1 rounded-md flex items-center space-x-1.5 transition text-xs ${
+                layoutDir === "LR"
+                  ? "bg-white font-semibold text-slate-900 shadow-2xs"
+                  : "font-medium text-slate-500 hover:text-slate-800"
+              }`}
+              title="Arrange horizontally"
+            >
+              <i className={`ph ph-arrows-left-right text-xs ${layoutDir === "LR" ? "text-brand-600" : "text-slate-400"}`} />
+              <span>Horizontal</span>
+            </button>
+          </div>
+          <div className="h-4 w-px bg-slate-200" />
+          <div className="flex items-center space-x-1.5">
+            <button
+              onClick={() => setShowVarList(true)}
+              className="px-2.5 py-1 rounded-lg font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-transparent hover:border-slate-200 transition flex items-center space-x-1.5 text-xs"
+            >
+              <i className="ph ph-brackets-curly text-brand-600 text-sm" />
+              <span>Variables ({variables.length})</span>
+            </button>
+            <button
+              onClick={() => setShowApiCfg(true)}
+              className="px-2.5 py-1 rounded-lg font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-transparent hover:border-slate-200 transition flex items-center space-x-1.5 text-xs"
+            >
+              <i className="ph ph-plugs-connected text-brand-600 text-sm" />
+              <span>API Configs ({apiConfigs.length})</span>
+            </button>
+          </div>
+        </div>
+        <div className="flex items-center space-x-3">
+          {savedMsg && <span className="text-[11px] text-slate-500 font-medium">{savedMsg}</span>}
+          {publishMsg && <span className="text-[11px] font-semibold text-slate-700">{publishMsg}</span>}
+          <span className="text-[11px] text-slate-400 font-medium flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+            All changes saved
+          </span>
+        </div>
+      </div>
+
+      {/* Publish errors */}
+      {publishErrors.length > 0 && (
+        <div className="bg-rose-50 border-b border-rose-200 px-4 py-2">
+          <ul className="text-xs text-rose-700 space-y-1">
+            {publishErrors.map((e, i) => (
+              <li key={i} className="flex items-center gap-2">
+                <i className="ph-bold ph-warning-circle text-rose-500" />
+                {e.nodeId ? (
+                  <button
+                    onClick={() => { focusNode(e.nodeId!); setSearchHighlightId(e.nodeId!); setTimeout(() => setSearchHighlightId(null), 2500); }}
+                    className="text-left underline decoration-dotted hover:decoration-solid"
+                    title="Go to this node"
+                  >
+                    {e.message} <span className="text-[10px] opacity-70">(click to view)</span>
+                  </button>
+                ) : (
+                  <span>{e.message}</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Workspace row: palette | canvas | config panel */}
+      <div className="flex flex-1 min-h-0 overflow-hidden">
+      {/* Palette — Nodes Library */}
+      <aside className="w-64 shrink-0 bg-white border-r border-slate-200 flex flex-col z-20 shadow-sm">
+        <div className="p-3.5 border-b border-slate-100 flex items-center justify-between shrink-0">
+          <span className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
+            <i className="ph-bold ph-squares-four text-brand-600" />
+            Nodes Library
+          </span>
+          <span className="text-[10px] text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded font-mono font-medium">Click to add</span>
+        </div>
+        <div className="flex-1 overflow-y-auto p-3 space-y-4 text-xs">
+          {PALETTE_GROUPS.map((group) => (
+            <div key={group.label}>
+              <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-2">{group.label}</div>
+              <div className="space-y-1.5">
+                {group.items.map((item) => (
+                  <button
+                    key={item.type}
+                    onClick={() => addNode(item.type)}
+                    className="group w-full flex items-center justify-between p-2 rounded-lg border border-slate-200 bg-white hover:border-brand-500 hover:bg-brand-50/40 hover:shadow-xs transition text-left"
+                  >
+                    <div className="flex items-center space-x-2">
+                      <span className={`w-6 h-6 rounded flex items-center justify-center text-xs ${item.accent}`}>
+                        <i className={`ph ${item.icon}`} />
+                      </span>
+                      <span className="font-medium text-slate-700 group-hover:text-slate-900">{TYPE_LABEL[item.type] ?? item.type}</span>
+                    </div>
+                    <i className="ph ph-plus text-slate-300 group-hover:text-brand-500" />
+                  </button>
+                ))}
+              </div>
+            </div>
           ))}
+        </div>
+        <div className="p-3 border-t border-slate-100 bg-slate-50/80 text-[11px] text-slate-500 flex items-center justify-between shrink-0">
+          <span className="flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-emerald-500" />
+            Meta Graph v20.0
+          </span>
+          <span className="font-mono text-slate-400">99.99% SLA</span>
         </div>
       </aside>
 
       {/* Canvas */}
-      <div className="flex-1 flex flex-col">
-        <div className="p-2 border-b border-base-300 bg-base-100">
-          <div className="flex items-center gap-3 flex-wrap">
-            <button
-              onClick={handleToggleActive}
-              disabled={activating}
-              className={`btn btn-sm ${isActive ? "btn-warning" : "btn-success"}`}
-            >
-              {activating ? "..." : isActive ? "Deactivate" : "Activate"}
-            </button>
-            <button onClick={handleSave} disabled={saving} className="btn btn-primary btn-sm">
-              {saving ? "Saving..." : "Save draft"}
-            </button>
-            <button onClick={handlePublish} disabled={publishing} className="btn btn-success btn-sm">
-              {publishing ? "Publishing..." : "Publish"}
-            </button>
-
-            {/* #2 — workflow variables (modal-based, no canvas shift) */}
-            <button onClick={() => setShowVarList(true)} className="btn btn-sm btn-outline">
-              Variables ({variables.length})
-            </button>
-            {/* #1 — global API configs */}
-            <button onClick={() => setShowApiCfg(true)} className="btn btn-sm btn-outline">
-              API Configs ({apiConfigs.length})
-            </button>
-
-            {/* Auto-layout: arrange nodes into a clean tree */}
-            <div className="join">
-              <button onClick={() => autoLayout("TB")} className="btn btn-sm btn-outline join-item" title="Arrange vertically">
-                ⬇ Vertical
-              </button>
-              <button onClick={() => autoLayout("LR")} className="btn btn-sm btn-outline join-item" title="Arrange horizontally">
-                ➡ Horizontal
-              </button>
-            </div>
-
-            {/* #14 — node search */}
-            <div className="relative ml-auto">
-              <input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search nodes..."
-                className="input input-bordered input-sm w-56"
-              />
-              {searchMatches.length > 0 && (
-                <ul className="absolute z-20 mt-1 w-full bg-base-100 border border-base-300 rounded shadow max-h-64 overflow-y-auto">
-                  {searchMatches.map((n) => (
-                    <li key={n.id}>
-                      <button
-                        onClick={() => { goToSearchResult(n.id); setSearch(""); }}
-                        className="w-full text-left px-3 py-2 hover:bg-base-200 text-sm"
-                      >
-                        <span className="font-medium">{nodeName(n)}</span>
-                        <span className="text-base-content/50 ml-2 text-xs">{n.data.nodeType}</span>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-
-            {savedMsg && <span className="text-sm text-base-content/70">{savedMsg}</span>}
-            {publishMsg && <span className="text-sm font-medium">{publishMsg}</span>}
-          </div>
-          {publishErrors.length > 0 && (
-            <ul className="mt-2 text-sm text-error space-y-1">
-              {publishErrors.map((e, i) => (
-                <li key={i} className="flex items-center gap-2">
-                  <span>•</span>
-                  {e.nodeId ? (
-                    <button
-                      onClick={() => { focusNode(e.nodeId!); setSearchHighlightId(e.nodeId!); setTimeout(() => setSearchHighlightId(null), 2500); }}
-                      className="text-left underline decoration-dotted hover:decoration-solid"
-                      title="Go to this node"
-                    >
-                      {e.message} <span className="text-xs opacity-70">(click to view)</span>
-                    </button>
-                  ) : (
-                    <span>{e.message}</span>
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
-
-        </div>
-
-        <div className="flex-1">
+      <div className="flex-1 flex flex-col min-w-0 min-h-0">
+        <div className="flex-1 min-h-0 h-full">
           <ReactFlow
             nodes={nodesForFlow}
             edges={edgesForFlow}
@@ -737,89 +914,132 @@ function BuilderInner() {
 
       {/* Config panel */}
       {selectedNode && (
-        <aside className="w-80 shrink-0 bg-base-100 border-l border-base-300 p-4 overflow-y-auto">
-          <div className="flex flex-col gap-3">
+        <aside className="w-[380px] shrink-0 bg-white border-l border-slate-200 shadow-[-6px_0_28px_-4px_rgba(15,23,42,0.08)] flex flex-col z-[60] h-full font-sans relative">
+          {/* Drawer header */}
+          <div className="px-5 py-4 border-b border-slate-200 flex flex-col space-y-2 bg-white shrink-0">
             <div className="flex items-center justify-between">
-              <h2 className="font-bold">{nodeName(selectedNode)}</h2>
-              <div className="flex gap-1">
+              <div className="flex items-center space-x-1.5 text-xs text-emerald-600 font-medium">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                <span>All changes saved</span>
+              </div>
+              <div className="flex items-center space-x-1.5">
                 {selectedNode.data.nodeType !== "START" && (
-                  <button onClick={deleteSelectedNode} className="btn btn-xs btn-error btn-outline">
-                    Delete
+                  <button
+                    onClick={deleteSelectedNode}
+                    className="px-2.5 py-1 text-xs font-semibold text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg transition-colors flex items-center space-x-1"
+                    title="Delete node"
+                  >
+                    <i className="ph-bold ph-trash text-[11px]" />
+                    <span>Delete</span>
                   </button>
                 )}
-                <button onClick={() => setSelectedId(null)} className="btn btn-xs btn-ghost" title="Close">✕</button>
+                <button
+                  onClick={() => setSelectedId(null)}
+                  className="w-7 h-7 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 flex items-center justify-center transition-colors"
+                  title="Close inspector"
+                >
+                  <i className="ph-bold ph-x text-sm" />
+                </button>
               </div>
             </div>
+            <div className="flex items-center space-x-3 pt-1">
+              <div className="w-10 h-10 rounded-xl bg-teal-50 border border-teal-200 text-teal-700 flex items-center justify-center shrink-0 text-base shadow-2xs">
+                <i className="ph-bold ph-chat-circle-dots" />
+              </div>
+              <div>
+                <h2 className="text-base font-bold text-slate-900 leading-tight">{nodeName(selectedNode)}</h2>
+                <div className="flex items-center space-x-2 mt-0.5">
+                  <span className="text-[11px] font-medium text-slate-500">{TYPE_LABEL[selectedNode.data.nodeType] ?? selectedNode.data.nodeType} Node</span>
+                  {selectedNode.data.nodeType === "ASK_INPUT" && (
+                    <>
+                      <span className="text-slate-300">•</span>
+                      <span className="text-[11px] text-teal-600 font-semibold">User Input Prompt</span>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
 
+          {/* Drawer scrollable body */}
+          <div className="pf-inspector flex-1 overflow-y-auto px-5 py-4 flex flex-col gap-4 text-xs">
             {/* #3 — editable node name (all nodes) */}
-            <label className="form-control">
-              <span className="label-text">Node name</span>
+            <div className="space-y-1.5">
+              <span className="block font-semibold text-slate-700">Node name</span>
               <input
-                className="input input-bordered input-sm"
+                className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 bg-white focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500 text-slate-800 font-medium placeholder:text-slate-400 transition-colors"
                 value={selectedNode.data.config.name ?? ""}
                 placeholder={`${TYPE_LABEL[selectedNode.data.nodeType] ?? selectedNode.data.nodeType} ${selectedNode.data.seq}`}
                 onChange={(e) => updateConfig("name", e.target.value)}
               />
-            </label>
+              <p className="text-[11px] text-slate-400">Internal identifier used across reporting and logs.</p>
+            </div>
 
-            {/* #6 — Connect to node: wires an edge from this node to another.
-                Only for single-output nodes (Condition/Validate/Buttons/List
-                use their own labeled handles instead). */}
+            {/* #6 — Connect to node */}
             {!isMultiOutput({ nodeType: selectedNode.data.nodeType, config: selectedNode.data.config }) && otherNodes.length > 0 && (
-              <label className="form-control">
-                <span className="label-text">Connect to node</span>
-                <select
-                  className="select select-bordered select-sm"
-                  value=""
-                  onChange={(e) => { if (e.target.value) connectToNode(e.target.value); }}
-                >
-                  <option value="">Connect this node to…</option>
-                  {otherNodes.map((n) => (
-                    <option key={n.id} value={n.id}>{nodeName(n)}</option>
-                  ))}
-                </select>
-              </label>
+              <div className="space-y-1.5">
+                <span className="block font-semibold text-slate-700">Connect to node</span>
+                <div className="relative">
+                  <select
+                    className="w-full appearance-none px-3 py-2 text-xs rounded-lg border border-slate-300 bg-white text-slate-700 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500 font-medium cursor-pointer pr-8"
+                    value=""
+                    onChange={(e) => { if (e.target.value) connectToNode(e.target.value); }}
+                  >
+                    <option value="">Connect this node to…</option>
+                    {otherNodes.map((n) => (
+                      <option key={n.id} value={n.id}>{nodeName(n)}</option>
+                    ))}
+                  </select>
+                  <i className="ph-bold ph-caret-down absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 text-[10px] pointer-events-none" />
+                </div>
+              </div>
             )}
 
-            <div className="divider my-0" />
+            <div className="h-px bg-slate-200" />
 
             {selectedNode.data.nodeType === "SEND_MESSAGE" && (
               <>
                 {/* #12 — Header */}
-                <label className="form-control">
-                  <span className="label-text">Header (optional)</span>
-                  <select
-                    className="select select-bordered select-sm"
-                    value={selectedNode.data.config.header?.type ?? ""}
-                    onChange={(e) => updateNestedConfig("header", "type", e.target.value)}
-                  >
-                    <option value="">None</option>
-                    <option value="text">Text</option>
-                    <option value="image">Image</option>
-                    <option value="document">Document</option>
-                    <option value="video">Video</option>
-                  </select>
-                </label>
+                <div className="space-y-1.5">
+                  <label className="block font-semibold text-slate-700">
+                    Header <span className="text-slate-400 font-normal">(optional)</span>
+                  </label>
+                  <div className="relative">
+                    <select
+                      className="w-full appearance-none px-3 py-2 text-xs rounded-lg border border-slate-300 bg-white text-slate-700 focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500 font-medium cursor-pointer pr-8"
+                      value={selectedNode.data.config.header?.type ?? ""}
+                      onChange={(e) => updateNestedConfig("header", "type", e.target.value)}
+                    >
+                      <option value="">None</option>
+                      <option value="text">Text Header</option>
+                      <option value="image">Image Header</option>
+                      <option value="video">Video Header</option>
+                      <option value="document">Document Header</option>
+                    </select>
+                    <i className="fa-solid fa-chevron-down absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 text-[10px] pointer-events-none" />
+                  </div>
+                </div>
+
                 {selectedNode.data.config.header?.type && (
-                  <label className="form-control">
-                    <span className="label-text">
+                  <div className="space-y-1.5">
+                    <label className="block font-semibold text-slate-700">
                       {selectedNode.data.config.header.type === "text" ? "Header text" : "Media URL"}
-                    </span>
+                    </label>
                     <input
-                      className="input input-bordered input-sm"
+                      className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 bg-white text-slate-800 font-medium focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500 transition-colors placeholder:text-slate-400"
                       placeholder={selectedNode.data.config.header.type === "text" ? "Header" : "https://..."}
                       value={selectedNode.data.config.header?.value ?? ""}
                       onChange={(e) => updateNestedConfig("header", "value", e.target.value)}
                     />
-                  </label>
+                  </div>
                 )}
 
                 {/* #12 — media preview for image/video/document headers */}
                 {selectedNode.data.config.header?.type &&
                   selectedNode.data.config.header?.type !== "text" &&
                   selectedNode.data.config.header?.value && (
-                    <div className="border border-base-200 rounded p-2 bg-base-200/30">
-                      <span className="text-[11px] text-base-content/50 block mb-1">Preview</span>
+                    <div className="border border-slate-200 rounded-lg p-2 bg-slate-50">
+                      <span className="text-[11px] text-slate-400 block mb-1">Preview</span>
                       {selectedNode.data.config.header.type === "image" && (
                         <img
                           src={selectedNode.data.config.header.value}
@@ -841,99 +1061,192 @@ function BuilderInner() {
                           href={selectedNode.data.config.header.value}
                           target="_blank"
                           rel="noreferrer"
-                          className="flex items-center gap-2 text-sm text-primary hover:underline break-all"
+                          className="flex items-center gap-2 text-sm text-teal-700 hover:underline break-all"
                         >
                           📄 {selectedNode.data.config.header.value.split("/").pop() || "Open document"}
                         </a>
                       )}
-                      <p className="text-[10px] text-base-content/40 mt-1">
+                      <p className="text-[10px] text-slate-400 mt-1">
                         If nothing shows, the URL may be private or not directly embeddable.
                       </p>
                     </div>
                   )}
 
                 {/* #12 — Body */}
-                <label className="form-control">
-                  <span className="label-text">Message text (body)</span>
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="block font-semibold text-slate-700">Message text (body)</label>
+                    <span className="text-[11px] text-slate-400 font-mono">
+                      {(selectedNode.data.config.text ?? "").length} / 1024
+                    </span>
+                  </div>
                   <VariableTextInput
                     value={selectedNode.data.config.text ?? ""}
                     onChange={(v) => updateConfig("text", v)}
                     variables={variables}
                     onCreateVariable={ensureVariable}
-                    placeholder="Type your message…"
+                    placeholder="Type your WhatsApp message…"
+                    rows={4}
                   />
-                </label>
+                </div>
 
                 {/* #12 — Footer */}
-                <label className="form-control">
-                  <span className="label-text">Footer (optional)</span>
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="block font-semibold text-slate-700">
+                      Footer <span className="text-slate-400 font-normal">(optional)</span>
+                    </label>
+                    <span className="text-[11px] text-slate-400">Small subtext below message</span>
+                  </div>
                   <VariableTextInput
                     value={selectedNode.data.config.footer ?? ""}
                     onChange={(v) => updateConfig("footer", v)}
                     variables={variables}
                     onCreateVariable={ensureVariable}
                     singleLine
+                    placeholder="e.g. Reply STOP to opt out"
                   />
-                </label>
+                </div>
 
                 {/* #10 — buttons: each is either a CTA (branches to a node)
                     or a Visit URL (opens a link). Max 3. */}
-                <div className="divider my-1 text-xs">Buttons (optional, max 3)</div>
-                {(selectedNode.data.config.buttons ?? []).map((b: any) => {
+                <div className="relative py-1">
+                  <div className="absolute inset-0 flex items-center">
+                    <div className="w-full border-t border-slate-200" />
+                  </div>
+                  <div className="relative flex justify-center">
+                    <span className="bg-white px-2.5 font-bold tracking-wider text-slate-400 text-[10px] uppercase">
+                      Buttons (optional, max 3)
+                    </span>
+                  </div>
+                </div>
+
+                {(selectedNode.data.config.buttons ?? []).map((b: any, idx: number) => {
                   const target = (nodesForFlow.find((n) => n.id === selectedId)?.data.optionTargets ?? {})[b.id];
                   const kind = b.kind ?? "cta";
                   return (
-                    <div key={b.id} className="flex flex-col gap-1 border border-base-200 rounded p-2">
-                      <div className="flex gap-1 items-center">
-                        <input
-                          className="input input-bordered input-sm flex-1"
-                          placeholder="Button label"
-                          value={b.label}
-                          onChange={(e) => updateOption(b.id, e.target.value)}
-                        />
-                        <button onClick={() => removeOption(b.id)} className="btn btn-xs btn-ghost text-error">✕</button>
-                      </div>
-                      <select
-                        className="select select-bordered select-xs"
-                        value={kind}
-                        onChange={(e) => updateOptionField(b.id, "kind", e.target.value)}
-                      >
-                        <option value="cta">CTA (branch to a node)</option>
-                        <option value="url">Visit URL (open link)</option>
-                      </select>
-                      {kind === "url" ? (
-                        <input
-                          className="input input-bordered input-xs"
-                          placeholder="https://example.com/{{var}}"
-                          value={b.url ?? ""}
-                          onChange={(e) => updateOptionField(b.id, "url", e.target.value)}
-                        />
-                      ) : (
-                        <div className="text-[11px]">
-                          {target ? (
-                            <span className="text-success">Connected → {target}</span>
-                          ) : (
-                            <span className="text-base-content/40">Not Connected</span>
-                          )}
+                    <div
+                      key={b.id}
+                      draggable={dragBtnIdx !== null}
+                      onDragStart={(e) => {
+                        e.dataTransfer.effectAllowed = "move";
+                        setDragBtnIdx(idx);
+                      }}
+                      onDragOver={(e) => {
+                        if (dragBtnIdx === null || dragBtnIdx === idx) return;
+                        e.preventDefault();
+                        e.dataTransfer.dropEffect = "move";
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        if (dragBtnIdx !== null) reorderOption(dragBtnIdx, idx);
+                        setDragBtnIdx(null);
+                      }}
+                      onDragEnd={() => setDragBtnIdx(null)}
+                      className={`rounded-xl p-3 bg-slate-50 border transition-all space-y-2 shadow-xs ${
+                        dragBtnIdx === idx
+                          ? "border-teal-400 ring-2 ring-teal-500/20 opacity-60"
+                          : "border-slate-200 hover:border-slate-300"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-2 flex-1 mr-2">
+                          <i
+                            className="ph-bold ph-dots-six-vertical text-slate-400 hover:text-slate-600 text-sm cursor-grab active:cursor-grabbing"
+                            title="Drag to reorder"
+                            onMouseDown={() => setDragBtnIdx(idx)}
+                            onMouseUp={() => setDragBtnIdx((cur) => (cur === idx ? null : cur))}
+                          />
+                          <input
+                            className="w-full bg-white text-slate-800 font-medium rounded border border-slate-200 px-2.5 py-1.5 focus:outline-none focus:border-teal-500 placeholder:font-normal placeholder:text-slate-400"
+                            style={{ fontSize: "12px", lineHeight: "16px" }}
+                            placeholder="Button label..."
+                            value={b.label}
+                            onChange={(e) => updateOption(b.id, e.target.value)}
+                          />
                         </div>
-                      )}
+                        <button
+                          onClick={() => removeOption(b.id)}
+                          className="w-6 h-6 rounded hover:bg-rose-50 text-slate-400 hover:text-rose-600 flex items-center justify-center transition-colors"
+                          title={`Delete Button ${idx + 1}`}
+                        >
+                          <i className="ph-bold ph-x text-xs" />
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-1 gap-2 pt-0.5">
+                        <div>
+                          <label className="text-[10px] font-semibold text-slate-500 block mb-0.5">Action</label>
+                          <div className="relative">
+                            <select
+                              className="w-full appearance-none px-2.5 py-1.5 text-xs leading-tight rounded border border-slate-200 bg-white text-slate-700 focus:outline-none focus:border-teal-500 pr-6"
+                              value={kind}
+                              onChange={(e) => updateOptionField(b.id, "kind", e.target.value)}
+                            >
+                              <option value="url">Visit URL (open link)</option>
+                              <option value="cta">CTA (branch to a node)</option>
+                            </select>
+                            <i className="ph-bold ph-caret-down absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 text-[9px] pointer-events-none" />
+                          </div>
+                        </div>
+                        {kind === "url" ? (
+                          <div>
+                            <label className="text-[10px] font-semibold text-slate-500 block mb-0.5">URL</label>
+                            <div className="relative flex items-center">
+                              <i className="ph-bold ph-link absolute left-2 text-slate-400 text-[10px]" />
+                              <input
+                                className="w-full bg-white font-mono text-[11px] leading-tight text-slate-700 rounded border border-slate-200 pl-6 pr-2 py-1.5 focus:outline-none focus:border-teal-500 placeholder:text-[11px] placeholder:text-slate-400"
+                                placeholder="https://example.com/{{var}}"
+                                value={b.url ?? ""}
+                                onChange={(e) => updateOptionField(b.id, "url", e.target.value)}
+                              />
+                            </div>
+                          </div>
+                        ) : (
+                          <div>
+                            <label className="text-[10px] font-semibold text-slate-500 block mb-0.5">Connected Branch</label>
+                            <div className="text-[11px] px-2.5 py-1 rounded border border-slate-200 bg-white">
+                              {target ? (
+                                <span className="text-emerald-600 font-medium flex items-center gap-1">
+                                  <i className="ph-bold ph-check text-[10px]" /> Connected → {target}
+                                </span>
+                              ) : (
+                                <span className="text-slate-400">Not connected — drag from this button on the canvas</span>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   );
                 })}
+
                 {(selectedNode.data.config.buttons ?? []).length < 3 && (
-                  <button onClick={() => addOption(3)} className="btn btn-sm btn-outline">+ Add button</button>
+                  <button
+                    onClick={() => addOption(3)}
+                    className="w-full py-2.5 px-3 rounded-xl border border-dashed border-slate-300 hover:border-teal-500 hover:bg-teal-50/30 text-teal-700 font-semibold text-xs flex items-center justify-center space-x-1.5 transition-colors"
+                    type="button"
+                  >
+                    <i className="ph-bold ph-plus text-xs" />
+                    <span>
+                      Add Button ({(selectedNode.data.config.buttons ?? []).length} of 3 used)
+                    </span>
+                  </button>
                 )}
-                <p className="text-xs text-base-content/50">
-                  CTA buttons branch the flow; Visit URL buttons open a link. Note: WhatsApp
-                  doesn't allow mixing reply buttons and URL buttons in one message.
-                </p>
+
+                <div className="rounded-xl p-3 bg-slate-50 border border-slate-200 text-[11px] text-slate-500 leading-relaxed flex items-start space-x-2">
+                  <i className="ph-bold ph-info text-slate-400 text-xs mt-0.5 shrink-0" />
+                  <span>
+                    CTA buttons branch the flow; Visit URL buttons open a link. Note: WhatsApp
+                    doesn't allow mixing reply buttons and URL buttons in one message.
+                  </span>
+                </div>
               </>
             )}
 
             {selectedNode.data.nodeType === "ASK_INPUT" && (
-              <>
-                <label className="form-control">
-                  <span className="label-text">Question text</span>
+              <div className="flex flex-col gap-4 text-xs font-sans">
+                <div className="space-y-1.5">
+                  <span className="block font-semibold text-slate-700">Question text</span>
                   <VariableTextInput
                     value={selectedNode.data.config.text ?? ""}
                     onChange={(v) => updateConfig("text", v)}
@@ -941,9 +1254,14 @@ function BuilderInner() {
                     onCreateVariable={ensureVariable}
                     placeholder="Ask something…"
                   />
-                </label>
-                <label className="form-control">
-                  <span className="label-text">Footer (optional)</span>
+                </div>
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="block font-semibold text-slate-700">
+                      Footer <span className="text-slate-400 font-normal">(optional)</span>
+                    </span>
+                    <span className="text-[10px] text-slate-400">Small subtext below message</span>
+                  </div>
                   <VariableTextInput
                     value={selectedNode.data.config.footer ?? ""}
                     onChange={(v) => updateConfig("footer", v)}
@@ -952,72 +1270,79 @@ function BuilderInner() {
                     singleLine
                     placeholder="Footer text…"
                   />
-                </label>
-                <label className="form-control">
-                  <span className="label-text">Save answer to variable</span>
+                </div>
+
+                <div className="h-px bg-slate-200" />
+
+                <div className="space-y-1.5">
+                  <span className="block font-semibold text-slate-700">Save answer to variable</span>
                   <VariableSelect
                     value={selectedNode.data.config.variable ?? ""}
                     onChange={(v) => updateConfig("variable", v)}
                     variables={variables}
                     onCreateVariable={ensureVariable}
                   />
-                </label>
+                  <p className="text-[11px] text-slate-400">Stores whatever text or selection the user sends in reply.</p>
+                </div>
 
                 {/* Validation */}
-                <label className="form-control">
-                  <span className="label-text">Validation type</span>
-                  <select
-                    className="select select-bordered select-sm"
-                    value={selectedNode.data.config.validationType ?? "none"}
-                    onChange={(e) => updateConfig("validationType", e.target.value)}
-                  >
-                    <option value="none">None</option>
-                    <option value="phone">Phone number</option>
-                    <option value="email">Email</option>
-                    <option value="url">URL</option>
-                    <option value="number">Only numbers</option>
-                    <option value="alphanumeric">Alphanumeric</option>
-                    <option value="custom">Custom (regex)</option>
-                  </select>
-                </label>
+                <div className="space-y-1.5">
+                  <span className="block font-semibold text-slate-700">Validation type</span>
+                  <div className="relative">
+                    <select
+                      className="w-full appearance-none px-3 py-2 text-xs rounded-lg border border-slate-300 bg-white text-slate-700 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500 font-medium cursor-pointer pr-8"
+                      value={selectedNode.data.config.validationType ?? "none"}
+                      onChange={(e) => updateConfig("validationType", e.target.value)}
+                    >
+                      <option value="none">None</option>
+                      <option value="phone">Phone number</option>
+                      <option value="email">Email</option>
+                      <option value="url">URL</option>
+                      <option value="number">Only numbers</option>
+                      <option value="alphanumeric">Alphanumeric</option>
+                      <option value="custom">Custom (regex)</option>
+                    </select>
+                    <i className="ph-bold ph-caret-down absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 text-[10px] pointer-events-none" />
+                  </div>
+                </div>
                 {selectedNode.data.config.validationType === "custom" && (
-                  <label className="form-control">
-                    <span className="label-text">Regex expression</span>
+                  <div className="space-y-1.5">
+                    <span className="block font-semibold text-slate-700">Regex expression</span>
                     <input
-                      className="input input-bordered input-sm font-mono"
+                      className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 bg-white focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500 text-slate-800 font-mono placeholder:text-slate-400 transition-colors"
                       placeholder="^[A-Za-z0-9]+$"
                       value={selectedNode.data.config.regex ?? ""}
                       onChange={(e) => updateConfig("regex", e.target.value)}
                     />
-                    <span className="text-[11px] text-base-content/50 mt-1">
-                      Examples — Phone: <code>^\+?[0-9]{"{10,15}"}$</code> · Email: <code>^[^\s@]+@[^\s@]+\.[^\s@]+$</code> · URL: <code>^https?:\/\/.+$</code>
-                    </span>
-                  </label>
+                    <p className="text-[11px] text-slate-400 leading-relaxed">
+                      Examples — Phone: <code className="font-mono text-slate-600">^\+?[0-9]{"{10,15}"}$</code> · Email: <code className="font-mono text-slate-600">^[^\s@]+@[^\s@]+\.[^\s@]+$</code> · URL: <code className="font-mono text-slate-600">^https?:\/\/.+$</code>
+                    </p>
+                  </div>
                 )}
 
                 {/* Retry + failure (only relevant when validating) */}
                 {selectedNode.data.config.validationType &&
                   selectedNode.data.config.validationType !== "none" && (
                     <>
-                      <label className="form-control">
-                        <span className="label-text">Retry limit (max 5)</span>
+                      <div className="space-y-1.5">
+                        <span className="block font-semibold text-slate-700">Retry limit (max 5)</span>
                         <input
                           type="number"
                           min={1}
                           max={5}
-                          className="input input-bordered input-sm w-24"
+                          className="w-24 px-3 py-2 text-xs rounded-lg border border-slate-300 bg-white focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500 text-slate-800 font-medium transition-colors"
                           value={selectedNode.data.config.retryLimit ?? 3}
                           onChange={(e) => {
                             const n = Math.max(1, Math.min(5, Number(e.target.value) || 1));
                             updateConfig("retryLimit", n);
                           }}
                         />
-                        <span className="text-[11px] text-base-content/50 mt-1">
+                        <p className="text-[11px] text-slate-400">
                           After this many failed attempts, the failure message is shown and the flow continues.
-                        </span>
-                      </label>
-                      <label className="form-control">
-                        <span className="label-text">Failure / invalid message</span>
+                        </p>
+                      </div>
+                      <div className="space-y-1.5">
+                        <span className="block font-semibold text-slate-700">Failure / invalid message</span>
                         <VariableTextInput
                           value={selectedNode.data.config.failureMessage ?? ""}
                           onChange={(v) => updateConfig("failureMessage", v)}
@@ -1025,7 +1350,7 @@ function BuilderInner() {
                           onCreateVariable={ensureVariable}
                           placeholder="That doesn't look valid. Please try again."
                         />
-                      </label>
+                      </div>
                     </>
                   )}
 
@@ -1038,7 +1363,7 @@ function BuilderInner() {
                   variables={variables}
                   onCreateVariable={ensureVariable}
                 />
-              </>
+              </div>
             )}
 
             {selectedNode.data.nodeType === "CONDITION" && (
@@ -1213,32 +1538,84 @@ function BuilderInner() {
                     onChange={(e) => updateConfig("buttonText", e.target.value)}
                   />
                 </label>
-                <div className="text-sm font-medium mt-2">Rows (max 10)</div>
-                {(selectedNode.data.config.rows ?? []).map((r: any) => {
+                <div className="relative py-1">
+                  <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-slate-200" /></div>
+                  <div className="relative flex justify-center">
+                    <span className="bg-white px-2.5 font-bold tracking-wider text-slate-400 text-[10px] uppercase">Rows (max 10)</span>
+                  </div>
+                </div>
+                {(selectedNode.data.config.rows ?? []).map((r: any, idx: number) => {
                   const target = (nodesForFlow.find((n) => n.id === selectedId)?.data.optionTargets ?? {})[r.id];
                   return (
-                    <div key={r.id} className="flex flex-col gap-1 border border-base-200 rounded p-2">
-                      <div className="flex gap-1 items-center">
-                        <input
-                          className="input input-bordered input-sm flex-1"
-                          placeholder="Row label"
-                          value={r.label}
-                          onChange={(e) => updateOption(r.id, e.target.value)}
-                        />
-                        <button onClick={() => removeOption(r.id)} className="btn btn-xs btn-ghost text-error">✕</button>
+                    <div
+                      key={r.id}
+                      draggable={dragBtnIdx !== null}
+                      onDragStart={(e) => {
+                        e.dataTransfer.effectAllowed = "move";
+                        setDragBtnIdx(idx);
+                      }}
+                      onDragOver={(e) => {
+                        if (dragBtnIdx === null || dragBtnIdx === idx) return;
+                        e.preventDefault();
+                        e.dataTransfer.dropEffect = "move";
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        if (dragBtnIdx !== null) reorderOption(dragBtnIdx, idx);
+                        setDragBtnIdx(null);
+                      }}
+                      onDragEnd={() => setDragBtnIdx(null)}
+                      className={`rounded-xl p-3 bg-slate-50 border transition-all space-y-2 shadow-xs ${
+                        dragBtnIdx === idx
+                          ? "border-teal-400 ring-2 ring-teal-500/20 opacity-60"
+                          : "border-slate-200 hover:border-slate-300"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-2 flex-1 mr-2">
+                          <i
+                            className="ph-bold ph-dots-six-vertical text-slate-400 hover:text-slate-600 text-sm cursor-grab active:cursor-grabbing"
+                            title="Drag to reorder"
+                            onMouseDown={() => setDragBtnIdx(idx)}
+                            onMouseUp={() => setDragBtnIdx((cur) => (cur === idx ? null : cur))}
+                          />
+                          <input
+                            className="w-full bg-white text-slate-800 font-medium rounded border border-slate-200 px-2.5 py-1.5 focus:outline-none focus:border-teal-500 placeholder:font-normal placeholder:text-slate-400"
+                            style={{ fontSize: "12px", lineHeight: "16px" }}
+                            placeholder="Row label..."
+                            value={r.label}
+                            onChange={(e) => updateOption(r.id, e.target.value)}
+                          />
+                        </div>
+                        <button
+                          onClick={() => removeOption(r.id)}
+                          className="w-6 h-6 rounded hover:bg-rose-50 text-slate-400 hover:text-rose-600 flex items-center justify-center transition-colors"
+                          title={`Delete Row ${idx + 1}`}
+                        >
+                          <i className="ph-bold ph-x text-xs" />
+                        </button>
                       </div>
                       <div className="text-[11px]">
                         {target ? (
-                          <span className="text-success">Connected → {target}</span>
+                          <span className="text-emerald-600 font-medium flex items-center gap-1">
+                            <i className="ph-bold ph-check text-[10px]" /> Connected → {target}
+                          </span>
                         ) : (
-                          <span className="text-base-content/40">Not Connected</span>
+                          <span className="text-slate-400">Not connected — drag from this row on the canvas</span>
                         )}
                       </div>
                     </div>
                   );
                 })}
                 {(selectedNode.data.config.rows ?? []).length < 10 && (
-                  <button onClick={() => addOption(10)} className="btn btn-sm btn-outline">+ Add row</button>
+                  <button
+                    onClick={() => addOption(10)}
+                    className="w-full py-2.5 px-3 rounded-xl border border-dashed border-slate-300 hover:border-teal-500 hover:bg-teal-50/30 text-teal-700 font-semibold text-xs flex items-center justify-center space-x-1.5 transition-colors"
+                    type="button"
+                  >
+                    <i className="ph-bold ph-plus text-xs" />
+                    <span>Add Row ({(selectedNode.data.config.rows ?? []).length} of 10 used)</span>
+                  </button>
                 )}
               </>
             )}
@@ -1302,67 +1679,6 @@ function BuilderInner() {
                   variables={variables}
                   onCreateVariable={ensureVariable}
                 />
-              </>
-            )}
-
-            {selectedNode.data.nodeType === "VALIDATE" && (
-              <>
-                <label className="form-control">
-                  <span className="label-text">Validation mode</span>
-                  <select
-                    className="select select-bordered select-sm"
-                    value={selectedNode.data.config.mode ?? "expression"}
-                    onChange={(e) => updateConfig("mode", e.target.value)}
-                  >
-                    <option value="expression">JavaScript expression</option>
-                    <option value="regex">Regex</option>
-                  </select>
-                </label>
-                {(selectedNode.data.config.mode ?? "expression") === "regex" ? (
-                  <>
-                    <label className="form-control">
-                      <span className="label-text">Value to test (supports {"{{var}}"})</span>
-                      <input
-                        className="input input-bordered input-sm"
-                        placeholder="{{email}}"
-                        value={selectedNode.data.config.value ?? ""}
-                        onChange={(e) => updateConfig("value", e.target.value)}
-                      />
-                    </label>
-                    <label className="form-control">
-                      <span className="label-text">Regex pattern</span>
-                      <input
-                        className="input input-bordered input-sm font-mono"
-                        placeholder="^[^@]+@[^@]+\\.[^@]+$"
-                        value={selectedNode.data.config.pattern ?? ""}
-                        onChange={(e) => updateConfig("pattern", e.target.value)}
-                      />
-                    </label>
-                    <label className="form-control">
-                      <span className="label-text">Regex flags (optional)</span>
-                      <input
-                        className="input input-bordered input-sm font-mono"
-                        placeholder="i"
-                        value={selectedNode.data.config.flags ?? ""}
-                        onChange={(e) => updateConfig("flags", e.target.value)}
-                      />
-                    </label>
-                  </>
-                ) : (
-                  <label className="form-control">
-                    <span className="label-text">JS expression (use vars.name)</span>
-                    <textarea
-                      className="textarea textarea-bordered font-mono text-xs"
-                      rows={3}
-                      placeholder="vars.age >= 18"
-                      value={selectedNode.data.config.expression ?? ""}
-                      onChange={(e) => updateConfig("expression", e.target.value)}
-                    />
-                  </label>
-                )}
-                <p className="text-xs text-base-content/50">
-                  Connect the <span className="text-success">pass</span> and <span className="text-error">fail</span> handles to the next nodes.
-                </p>
               </>
             )}
 
@@ -1533,80 +1849,229 @@ function BuilderInner() {
               </>
             )}
 
-            {selectedNode.data.nodeType === "START" && (
-              <>
-                <label className="form-control">
-                  <span className="label-text">Trigger keywords (one per line)</span>
-                  <textarea
-                    className="textarea textarea-bordered"
-                    rows={4}
-                    placeholder={"hi\nhello\nstart"}
-                    value={(selectedNode.data.config.keywords ?? []).join("\n")}
-                    onChange={(e) =>
-                      updateConfig(
-                        "keywords",
-                        e.target.value.split("\n").map((k) => k.trim()).filter(Boolean)
-                      )
-                    }
-                  />
-                </label>
-                <label className="form-control">
-                  <span className="label-text">Match type</span>
-                  <select
-                    className="select select-bordered select-sm"
-                    value={selectedNode.data.config.matchType ?? "contains"}
-                    onChange={(e) => updateConfig("matchType", e.target.value)}
-                  >
-                    <option value="contains">Contains keyword</option>
-                    <option value="exact">Exact match</option>
-                    <option value="starts_with">Starts with keyword</option>
-                  </select>
-                </label>
-                <p className="text-xs text-base-content/50">
-                  Leave keywords empty to trigger on any message.
-                </p>
-              </>
-            )}
+            {selectedNode.data.nodeType === "START" && (() => {
+              const keywords: string[] = selectedNode.data.config.keywords ?? [];
+              const matchType = selectedNode.data.config.matchType ?? "contains";
+
+              const addKeyword = (raw: string) => {
+                const cleaned = raw.trim().replace(/,$/, "").trim();
+                if (!cleaned || keywords.includes(cleaned)) {
+                  setKeywordDraft("");
+                  return;
+                }
+                updateConfig("keywords", [...keywords, cleaned]);
+                setKeywordDraft("");
+              };
+
+              const removeKeyword = (kw: string) =>
+                updateConfig("keywords", keywords.filter((k) => k !== kw));
+
+              return (
+                <>
+                  {/* Trigger keywords — chip / tag input */}
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="block font-semibold text-slate-700 text-xs">
+                        Trigger keywords
+                      </label>
+                      <span className="text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded font-semibold">
+                        {keywords.length} Active
+                      </span>
+                    </div>
+
+                    <div className="border border-slate-300 rounded-xl p-2 focus-within:border-teal-500 focus-within:ring-1 focus-within:ring-teal-500 transition-all bg-white shadow-xs flex flex-wrap gap-1.5 items-center min-h-[5rem] content-start">
+                      {keywords.map((kw) => (
+                        <span
+                          key={kw}
+                          className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-md bg-teal-50 border border-teal-200 text-teal-800 text-xs font-medium shadow-xs"
+                        >
+                          <span>{kw}</span>
+                          <button
+                            type="button"
+                            onClick={() => removeKeyword(kw)}
+                            className="hover:text-teal-900 text-teal-600 focus:outline-none ml-1"
+                          >
+                            <i className="fa-solid fa-xmark text-[10px]" />
+                          </button>
+                        </span>
+                      ))}
+                      <div className="inline-flex items-center flex-1 min-w-[120px] py-1 px-1">
+                        <input
+                          type="text"
+                          value={keywordDraft}
+                          onChange={(e) => setKeywordDraft(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === ",") {
+                              e.preventDefault();
+                              addKeyword(keywordDraft);
+                            } else if (e.key === "Backspace" && !keywordDraft && keywords.length) {
+                              removeKeyword(keywords[keywords.length - 1]);
+                            }
+                          }}
+                          onBlur={() => keywordDraft && addKeyword(keywordDraft)}
+                          placeholder="+ Add keyword..."
+                          className="w-full text-xs text-slate-700 placeholder:text-slate-400 bg-transparent border-0 focus:outline-none focus:ring-0 p-0"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between text-[11px] text-slate-400 px-0.5">
+                      <span>Press Enter or comma to add tag</span>
+                      <span className="font-mono">{keywords.length} tags</span>
+                    </div>
+                  </div>
+
+                  {/* Match type */}
+                  <div className="space-y-1.5">
+                    <label className="block font-semibold text-slate-700 text-xs" htmlFor="match-type-select">
+                      Match type
+                    </label>
+                    <div className="relative">
+                      <select
+                        id="match-type-select"
+                        value={matchType}
+                        onChange={(e) => updateConfig("matchType", e.target.value)}
+                        className="w-full appearance-none px-3 py-2 text-xs rounded-lg border border-slate-300 bg-white text-slate-700 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500 font-medium cursor-pointer pr-8"
+                      >
+                        <option value="exact">Exact match</option>
+                        <option value="contains">Contains keyword</option>
+                        <option value="starts_with">Starts with</option>
+                        <option value="regex">Regex expression</option>
+                      </select>
+                      <i className="fa-solid fa-chevron-down absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 text-[10px] pointer-events-none" />
+                    </div>
+                    <p className="text-[11px] text-slate-400">
+                      Leave keywords empty to trigger on any message.
+                    </p>
+                  </div>
+                </>
+              );
+            })()}
+          </div>
+
+          {/* Drawer sticky footer */}
+          <div className="p-4 bg-white border-t border-slate-200 flex items-center shrink-0 shadow-[0_-4px_16px_-6px_rgba(15,23,42,0.08)]">
+            <button
+              onClick={async () => {
+                await handleSave();
+                setSelectedId(null);
+              }}
+              disabled={saving}
+              className="flex-1 py-2 px-4 bg-teal-600 hover:bg-teal-700 active:bg-teal-800 text-white font-semibold text-xs rounded-xl shadow-sm transition-all flex items-center justify-center space-x-2 disabled:opacity-60"
+            >
+              <i className="ph-bold ph-check text-xs" />
+              <span>{saving ? "Saving..." : "Save Changes"}</span>
+            </button>
           </div>
         </aside>
       )}
+      </div>
+      {/* end workspace row */}
 
       <TestPanel chatbotId={chatbotId} />
 
       {/* #2 — View Variables modal (overlay, does not shift the canvas) */}
       {showVarList && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setShowVarList(false)}>
-          <div className="bg-base-100 rounded-lg shadow-xl w-[520px] max-h-[80vh] overflow-y-auto p-5" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="font-bold text-lg">Workflow Variables</h3>
-              <div className="flex gap-2">
-                <button onClick={openAddVariable} className="btn btn-sm btn-primary">+ Add Variable</button>
-                <button onClick={() => setShowVarList(false)} className="btn btn-sm btn-ghost">✕</button>
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 transition-all" onClick={() => setShowVarList(false)}>
+          <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xl w-[600px] max-w-full max-h-[68vh] overflow-hidden flex flex-col font-sans" onClick={(e) => e.stopPropagation()}>
+            {/* Header */}
+            <div className="p-6 pb-4 border-b border-slate-100 flex items-center justify-between">
+              <div className="flex items-center space-x-3">
+                <div className="w-9 h-9 rounded-xl bg-brand-50 border border-brand-200/70 flex items-center justify-center text-brand-600 shadow-2xs">
+                  <i className="ph-bold ph-brackets-curly text-lg" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900 tracking-tight">Workflow Variables</h3>
+                  <p className="text-xs text-slate-500 mt-0.5">Manage global variables and inputs for this automation flow</p>
+                </div>
+              </div>
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={openAddVariable}
+                  className="flex items-center space-x-1.5 bg-teal-600 hover:bg-teal-700 text-white font-semibold text-xs px-3.5 py-2 rounded-lg shadow-sm transition active:scale-95"
+                >
+                  <i className="ph-bold ph-plus text-xs" />
+                  <span>Add Variable</span>
+                </button>
+                <button
+                  onClick={() => setShowVarList(false)}
+                  className="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-400 hover:text-slate-700 transition"
+                  title="Close modal"
+                >
+                  <i className="ph-bold ph-x text-base" />
+                </button>
               </div>
             </div>
-            {variables.length === 0 ? (
-              <p className="text-sm text-base-content/50 py-6 text-center">
-                No variables yet. Add one to reference it across nodes with {"{{name}}"}.
-              </p>
-            ) : (
-              <table className="table table-sm">
-                <thead>
-                  <tr><th>Name</th><th>Type</th><th>Stores (default)</th><th></th></tr>
-                </thead>
-                <tbody>
-                  {variables.map((v) => (
-                    <tr key={v.name}>
-                      <td className="font-mono">{v.name}</td>
-                      <td><span className="badge badge-ghost badge-sm">{v.type}</span></td>
-                      <td className="text-base-content/70">{v.default || <span className="text-base-content/30">—</span>}</td>
-                      <td>
-                        <button onClick={() => removeVariable(v.name)} className="btn btn-xs btn-ghost text-error">✕</button>
-                      </td>
+
+            {/* Body */}
+            <div className="p-6 pt-5 overflow-y-auto">
+              {variables.length === 0 ? (
+                <p className="text-sm text-slate-400 py-8 text-center">
+                  No variables yet. Add one to reference it across nodes with{" "}
+                  <code className="font-mono text-slate-700 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200 text-[11px]">{"{{name}}"}</code>.
+                </p>
+              ) : (
+                <table className="w-full text-left">
+                  <thead className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider border-b border-slate-100">
+                    <tr>
+                      <th className="pb-3 pl-1 font-semibold">Name</th>
+                      <th className="pb-3 font-semibold">Type</th>
+                      <th className="pb-3 font-semibold">Stores (Default)</th>
+                      <th className="pb-3 pr-1 text-right font-semibold">Action</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-xs">
+                    {variables.map((v) => (
+                      <tr key={v.name} className="group hover:bg-slate-50/70 transition-colors">
+                        <td className="py-3.5 pl-1 font-mono font-semibold text-slate-800">
+                          <span className="text-slate-400 font-sans mr-1">#</span>{v.name}
+                        </td>
+                        <td className="py-3.5">
+                          <span
+                            className={`inline-flex items-center px-2.5 py-0.5 rounded-full font-medium text-xs font-mono ${
+                              v.type === "number"
+                                ? "bg-indigo-50 text-indigo-600"
+                                : v.type === "boolean"
+                                ? "bg-amber-50 text-amber-700"
+                                : "bg-slate-100 text-slate-600"
+                            }`}
+                          >
+                            {v.type}
+                          </span>
+                        </td>
+                        <td className="py-3.5">
+                          {v.default ? (
+                            <span className="font-mono text-xs text-teal-700 bg-teal-50 px-2 py-0.5 rounded border border-teal-200 font-semibold">{v.default}</span>
+                          ) : (
+                            <span className="text-slate-400 font-mono">—</span>
+                          )}
+                        </td>
+                        <td className="py-3.5 pr-1 text-right">
+                          <button
+                            onClick={() => removeVariable(v.name)}
+                            className="w-7 h-7 inline-flex items-center justify-center rounded text-rose-500 hover:bg-rose-50 hover:text-rose-700 transition"
+                            title="Delete variable"
+                          >
+                            <i className="ph-bold ph-x text-xs" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            {/* Footer tip */}
+            <div className="p-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500 rounded-b-2xl">
+              <div className="flex items-center space-x-2">
+                <i className="ph-fill ph-sparkle text-brand-600" />
+                <span>
+                  Tip: Reference any variable in message nodes using{" "}
+                  <code className="font-mono text-slate-800 font-semibold bg-white px-1.5 py-0.5 rounded border border-slate-200 text-[11px]">{"{{variable_name}}"}</code>
+                </span>
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -1658,56 +2123,240 @@ function BuilderInner() {
 
       {/* #1 — Global API Configs modal */}
       {showApiCfg && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setShowApiCfg(false)}>
-          <div className="bg-base-100 rounded-lg shadow-xl w-[600px] max-h-[80vh] overflow-y-auto p-5" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <h3 className="font-bold text-lg">Global API Configs</h3>
-                <p className="text-xs text-base-content/50">Reusable base URL + shared headers. API nodes reference these by name.</p>
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4"
+          onClick={() => setShowApiCfg(false)}
+        >
+          <div
+            className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Top gradient accent */}
+            <div className="h-1.5 w-full bg-gradient-to-r from-brand-600 via-brand-500 to-teal-300" />
+
+            {/* Header */}
+            <div className="p-6 pb-5 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+              <div className="flex items-start space-x-3.5">
+                <div className="w-11 h-11 rounded-xl bg-brand-50 text-brand-700 flex items-center justify-center shadow-sm shrink-0">
+                  <i className="ph-bold ph-plugs-connected text-2xl" />
+                </div>
+                <div>
+                  <div className="flex items-center space-x-2.5">
+                    <h2 className="text-lg font-extrabold text-slate-900 tracking-tight">Global API Configs</h2>
+                    <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-600">
+                      {apiConfigs.length} Active
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-0.5 max-w-md">
+                    Reusable base URLs and authentication headers shared across all journey nodes.
+                  </p>
+                </div>
               </div>
-              <div className="flex gap-2">
-                <button onClick={addApiConfig} className="btn btn-sm btn-primary">+ Add Config</button>
-                <button onClick={() => setShowApiCfg(false)} className="btn btn-sm btn-ghost">✕</button>
+              <div className="flex items-center space-x-2 shrink-0 self-end md:self-auto">
+                <button
+                  onClick={addApiConfig}
+                  className="flex items-center space-x-1.5 bg-brand-600 hover:bg-brand-700 text-white text-xs font-semibold px-4 py-2 rounded-lg shadow-sm transition active:scale-95"
+                >
+                  <i className="ph-bold ph-plus text-sm" />
+                  <span>Add Config</span>
+                </button>
+                <button
+                  onClick={() => setShowApiCfg(false)}
+                  className="w-9 h-9 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-400 hover:text-slate-700 flex items-center justify-center transition"
+                  title="Close modal"
+                >
+                  <i className="ph-bold ph-x text-lg" />
+                </button>
               </div>
             </div>
-            {apiConfigs.length === 0 ? (
-              <p className="text-sm text-base-content/50 py-6 text-center">
-                No API configs yet. Add one to share a base URL and auth headers across API nodes.
-              </p>
-            ) : (
-              <div className="flex flex-col gap-4">
-                {apiConfigs.map((c, i) => (
-                  <div key={i} className="border border-base-300 rounded p-3">
-                    <div className="flex gap-2 items-center mb-2">
-                      <input
-                        className="input input-bordered input-sm w-40"
-                        placeholder="config name"
-                        value={c.name}
-                        onChange={(e) => updateApiConfig(i, { name: e.target.value })}
-                      />
-                      <input
-                        className="input input-bordered input-sm flex-1"
-                        placeholder="Base URL (e.g. https://api.example.com)"
-                        value={c.baseUrl}
-                        onChange={(e) => updateApiConfig(i, { baseUrl: e.target.value })}
-                      />
-                      <button onClick={() => removeApiConfig(i)} className="btn btn-xs btn-ghost text-error">✕</button>
-                    </div>
-                    <div className="text-xs font-medium mb-1">Shared headers</div>
-                    {c.headers.map((h, j) => (
-                      <div key={j} className="flex gap-1 mb-1">
-                        <input className="input input-bordered input-xs flex-1" placeholder="key (e.g. Authorization)" value={h.key}
-                          onChange={(e) => updateApiConfigHeader(i, j, "key", e.target.value)} />
-                        <input className="input input-bordered input-xs flex-1" placeholder="value (e.g. Bearer xxx)" value={h.value}
-                          onChange={(e) => updateApiConfigHeader(i, j, "value", e.target.value)} />
-                        <button onClick={() => removeApiConfigHeader(i, j)} className="btn btn-xs btn-ghost text-error">✕</button>
-                      </div>
-                    ))}
-                    <button onClick={() => addApiConfigHeader(i)} className="btn btn-xs btn-outline mt-1">+ Header</button>
-                  </div>
-                ))}
+
+            {/* Filter / search row */}
+            <div className="px-6 py-2.5 bg-slate-50 flex items-center justify-between gap-3 border-y border-slate-100">
+              <div className="relative flex-1 max-w-sm">
+                <i className="ph ph-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm" />
+                <input
+                  className="w-full bg-white border border-slate-200 pl-9 pr-3 py-1.5 text-xs text-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 placeholder:text-slate-400 transition"
+                  placeholder="Search by name, header, or domain..."
+                  value={apiCfgSearch}
+                  onChange={(e) => setApiCfgSearch(e.target.value)}
+                  type="text"
+                />
               </div>
-            )}
+              <div className="flex items-center space-x-1.5 text-[11px] font-medium text-slate-500">
+                <i className="ph-fill ph-lock text-brand-600 text-sm" />
+                <span>AES-256 GCM Header Encryption</span>
+              </div>
+            </div>
+
+            {/* Body */}
+            <div className="p-6 space-y-4 overflow-y-auto flex-1">
+              {apiConfigs.length === 0 ? (
+                <div className="text-center py-10">
+                  <div className="w-12 h-12 mx-auto rounded-xl bg-slate-100 text-slate-400 flex items-center justify-center mb-3">
+                    <i className="ph ph-plugs text-2xl" />
+                  </div>
+                  <p className="text-sm text-slate-500">
+                    No API configs yet. Add one to share a base URL and auth headers across API nodes.
+                  </p>
+                </div>
+              ) : (
+                apiConfigs
+                  .map((c, i) => ({ c, i }))
+                  .filter(({ c }) => {
+                    const q = apiCfgSearch.trim().toLowerCase();
+                    if (!q) return true;
+                    return (
+                      c.name.toLowerCase().includes(q) ||
+                      c.baseUrl.toLowerCase().includes(q) ||
+                      c.headers.some(
+                        (h) => h.key.toLowerCase().includes(q) || h.value.toLowerCase().includes(q)
+                      )
+                    );
+                  })
+                  .map(({ c, i }) => (
+                    <div key={i} className="rounded-xl border border-slate-200 bg-white shadow-sm p-5 space-y-4">
+                      {/* Card header */}
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                        <div className="flex items-center space-x-3">
+                          <span className="w-8 h-8 rounded-lg bg-slate-100 text-slate-700 flex items-center justify-center font-bold text-sm shrink-0">
+                            {i + 1}
+                          </span>
+                          <input
+                            className="text-sm font-semibold text-slate-900 bg-slate-50 hover:bg-slate-100 px-2.5 py-1 rounded-lg focus:outline-none focus:bg-white focus:ring-2 focus:ring-brand-500/30 transition w-56"
+                            placeholder="Config name"
+                            value={c.name}
+                            onChange={(e) => updateApiConfig(i, { name: e.target.value })}
+                            type="text"
+                          />
+                          <span className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full bg-brand-50 text-brand-700 text-[11px] font-medium">
+                            <span className="w-1.5 h-1.5 rounded-full bg-brand-500" />
+                            <span>{c.headers.length} header{c.headers.length === 1 ? "" : "s"}</span>
+                          </span>
+                        </div>
+                        <div className="flex items-center space-x-1 self-end sm:self-auto">
+                          <button
+                            onClick={() => removeApiConfig(i)}
+                            className="p-1.5 text-slate-400 hover:text-rose-600 rounded hover:bg-rose-50 transition"
+                            title="Delete config"
+                          >
+                            <i className="ph ph-trash text-base" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Base URL */}
+                      <div className="space-y-1.5">
+                        <label className="text-[11px] font-semibold text-slate-600 flex items-center gap-1.5">
+                          <span>Base URL</span>
+                          <span className="text-slate-400 font-normal">(Inherited by all sub-endpoints)</span>
+                        </label>
+                        <input
+                          className="w-full bg-slate-50 px-3.5 py-2 text-xs text-slate-800 rounded-lg focus:outline-none focus:bg-white focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 border border-slate-200 font-mono transition"
+                          placeholder="https://api.example.com"
+                          value={c.baseUrl}
+                          onChange={(e) => updateApiConfig(i, { baseUrl: e.target.value })}
+                          type="text"
+                        />
+                      </div>
+
+                      {/* Shared headers */}
+                      <div className="pt-1 space-y-2.5">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center space-x-2">
+                            <span className="text-xs font-semibold text-slate-800">Shared Headers</span>
+                            <span className="px-2 py-0.5 rounded text-[11px] bg-slate-100 text-slate-500 font-mono">
+                              {c.headers.length} header{c.headers.length === 1 ? "" : "s"}
+                            </span>
+                          </div>
+                          <button
+                            onClick={() => addApiConfigHeader(i)}
+                            className="flex items-center space-x-1 text-brand-600 hover:text-brand-700 text-[11px] font-semibold transition"
+                          >
+                            <i className="ph-bold ph-plus-circle text-sm" />
+                            <span>Add Header</span>
+                          </button>
+                        </div>
+
+                        {c.headers.length > 0 && (
+                          <div className="space-y-2 bg-slate-50/70 rounded-xl p-3">
+                            {c.headers.map((h, j) => {
+                              const secret = /authorization|token|secret|key|bearer/i.test(h.key);
+                              const revealed = revealedHeaders[`${i}-${j}`];
+                              return (
+                                <div key={j} className="flex items-center space-x-2">
+                                  <input
+                                    className="w-5/12 bg-white border border-slate-200 px-3 py-1.5 text-xs font-mono text-slate-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/20"
+                                    placeholder="key (e.g. Authorization)"
+                                    value={h.key}
+                                    onChange={(e) => updateApiConfigHeader(i, j, "key", e.target.value)}
+                                    type="text"
+                                  />
+                                  <div className="flex-1 relative">
+                                    <input
+                                      className="w-full bg-white border border-slate-200 pl-3 pr-9 py-1.5 text-xs font-mono text-slate-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/20"
+                                      placeholder="value (e.g. Bearer xxx)"
+                                      value={h.value}
+                                      onChange={(e) => updateApiConfigHeader(i, j, "value", e.target.value)}
+                                      type={secret && !revealed ? "password" : "text"}
+                                    />
+                                    {secret && (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          setRevealedHeaders((r) => ({ ...r, [`${i}-${j}`]: !r[`${i}-${j}`] }))
+                                        }
+                                        className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-700 transition"
+                                        title={revealed ? "Hide value" : "Show value"}
+                                      >
+                                        <i className={`ph ${revealed ? "ph-eye-slash" : "ph-eye"} text-sm`} />
+                                      </button>
+                                    )}
+                                  </div>
+                                  <button
+                                    onClick={() => removeApiConfigHeader(i, j)}
+                                    className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition"
+                                    title="Remove header"
+                                  >
+                                    <i className="ph ph-x text-base" />
+                                  </button>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        <p className="text-[11px] text-slate-400 flex items-center gap-1.5 pt-1">
+                          <i className="ph-fill ph-shield-check text-sm text-brand-600" />
+                          <span>Encrypted at rest &amp; automatically merged with payload headers on outgoing calls.</span>
+                        </p>
+                      </div>
+                    </div>
+                  ))
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="p-5 px-6 bg-slate-50 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-3">
+              <span className="text-xs text-slate-500 flex items-center gap-1.5">
+                <i className="ph ph-question text-base text-brand-600" />
+                <span>API nodes reference these configs by name.</span>
+              </span>
+              <div className="flex items-center space-x-2.5 w-full sm:w-auto justify-end">
+                <button
+                  onClick={() => setShowApiCfg(false)}
+                  className="px-4 py-2 rounded-lg text-xs font-semibold text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => setShowApiCfg(false)}
+                  className="flex items-center space-x-1.5 bg-brand-600 hover:bg-brand-700 text-white text-xs font-semibold px-5 py-2 rounded-lg shadow-sm transition active:scale-95"
+                >
+                  <i className="ph-bold ph-check text-sm" />
+                  <span>Save Configurations</span>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

@@ -48,7 +48,12 @@ export async function handleInboundMessage(
     chatbotId: string,
     waUserId: string,
     text: string,
-    messaging: MessagingAdapter
+    messaging: MessagingAdapter,
+    // The web-based tester passes { bypassTrigger: true } so clicking "Test"
+    // always starts the flow, regardless of the START node's trigger keywords.
+    // The live WhatsApp webhook path omits this, so trigger matching still
+    // applies there exactly as before.
+    opts: { bypassTrigger?: boolean } = {}
 ): Promise<{ status: string }> {
 
 
@@ -81,7 +86,7 @@ export async function handleInboundMessage(
     // message matches the START node's trigger keywords (#16).
     if (!conversation) {
         const startNode = definition.nodes.find((node) => node.nodeType === "START");
-        if (!matchesTrigger(startNode, text)) {
+        if (!opts.bypassTrigger && !matchesTrigger(startNode, text)) {
             return { status: "no_trigger_match" };
         }
         // Seed declared workflow variables with their defaults (#2).
@@ -137,6 +142,15 @@ export async function handleInboundMessage(
         context.incomingText = null;
     }
 
+    // [DIAG] Temporary diagnostic — remove once the resume issue is confirmed.
+    console.log("[handleInbound] resume debug:", {
+        conversationId: conversation.id,
+        savedCurrentNodeId: conversation.currentNodeId,
+        startNodeId,
+        incomingText: context.incomingText,
+        edges: (definition.edges ?? []).map((e: any) => ({ s: e.source, t: e.target, h: e.sourceHandle })),
+    });
+
     // Log the inbound message before running.
     await prisma.message.create({
         data: {
@@ -173,6 +187,12 @@ export async function handleInboundMessage(
         });
         return { status: "engine_error" };
     }
+
+    // [DIAG] Temporary diagnostic — remove once the resume issue is confirmed.
+    console.log("[handleInbound] engine result:", {
+        pausedAtNodeId: result.pausedAtNodeId,
+        status: result.status,
+    });
 
     // 6. Save the result back to the conversation.
     await prisma.conversation.update({

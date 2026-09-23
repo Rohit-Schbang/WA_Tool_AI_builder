@@ -25,6 +25,16 @@ const config: Config = {
           600: "#ea580c",
           700: "#c2410c",
         },
+        // Brand teal scale used by the flow builder (matches the mockup).
+        brand: {
+          50: "#f0fdfa",
+          100: "#ccfbf1",
+          200: "#99f6e4",
+          500: "#14b8a6",
+          600: "#0d9488",
+          700: "#0f766e",
+          900: "#134e4a",
+        },
         // Material 3 tokens — used by the PingFlow dashboard (chatbots page).
         // `error` stays #ba1a1a so the auth pages' text-error is unchanged.
         "primary-container": "#008378",

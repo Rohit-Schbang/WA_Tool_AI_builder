@@ -87,7 +87,9 @@ workflowsRouter.post("/test", async (req: Request, res: Response) => {
   // Capture the bot's outgoing messages via a ConsoleAdapter.
   const adapter = new ConsoleAdapter();
 
-  const result = await handleInboundMessage(chatbotId, waUserId, message ?? "", adapter);
+  const result = await handleInboundMessage(chatbotId, waUserId, message ?? "", adapter, {
+    bypassTrigger: true,
+  });
 
   return res.json({
     status: result.status,
