@@ -5,3 +5,68 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Plus Jakarta Sans is a variable font — enable optical sizing everywhere. */
+html {
+  font-optical-sizing: auto;
+}
+
+/* Floating metric card animations for the PingFlow auth showcase. */
+@keyframes float1 {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-7px); }
+}
+@keyframes float2 {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-8px); }
+}
+@keyframes float3 {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-6px); }
+}
+.animate-float-1 {
+  animation: float1 4s ease-in-out infinite;
+}
+.animate-float-2 {
+  animation: float2 4.5s ease-in-out infinite 0.7s;
+}
+.animate-float-3 {
+  animation: float3 5s ease-in-out infinite 1.4s;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-float-1,
+  .animate-float-2,
+  .animate-float-3 {
+    animation: none !important;
+  }
+}
+
+/* Keep browser autofill from washing out inputs with its default
+   light-blue background / faint text. Forces white bg + dark slate text. */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active {
+  -webkit-text-fill-color: #1e293b; /* slate-800 */
+  caret-color: #1e293b;
+  -webkit-box-shadow: 0 0 0 1000px #ffffff inset;
+  box-shadow: 0 0 0 1000px #ffffff inset;
+  transition: background-color 5000s ease-in-out 0s;
+}
+
+/* Material Symbols Outlined icon font, used across the PingFlow auth pages. */
+.material-symbols-outlined {
+  font-family: "Material Symbols Outlined";
+  font-weight: normal;
+  font-style: normal;
+  font-size: 24px;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  -webkit-font-feature-settings: "liga";
+  -webkit-font-smoothing: antialiased;
+}
