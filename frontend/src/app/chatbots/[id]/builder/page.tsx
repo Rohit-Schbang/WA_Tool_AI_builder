@@ -226,6 +226,12 @@ function BuilderInner() {
   // Index of the Send Message button currently being dragged (for reordering).
   const [dragBtnIdx, setDragBtnIdx] = useState<number | null>(null);
 
+  // Result of a Custom Code (TRANSFORM) test run in the config panel.
+  const [codeTestResult, setCodeTestResult] = useState<{ ok: boolean; value: string } | null>(null);
+  // Custom Code expression textarea ref + variable-insert dropdown visibility.
+  const codeExprRef = useRef<HTMLTextAreaElement>(null);
+  const [showCodeVars, setShowCodeVars] = useState(false);
+
   // #14 — search box state
   const [search, setSearch] = useState("");
   const [searchHighlightId, setSearchHighlightId] = useState<string | null>(null);
@@ -481,6 +487,9 @@ function BuilderInner() {
   // ---------------------- SELECTION ----------------------
   const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
     setSelectedId(node.id);
+    // Clear any Custom Code test output / open dropdown from the previous node.
+    setCodeTestResult(null);
+    setShowCodeVars(false);
   }, []);
 
   // Connect the selected node to another node (#6 — "Connect to node").
@@ -594,6 +603,62 @@ function BuilderInner() {
     setVariables((vs) =>
       vs.some((v) => v.name === trimmed) ? vs : [...vs, { name: trimmed, type, default: "" }]
     );
+  }
+
+  // Insert `vars.<name>` at the cursor of the Custom Code expression textarea
+  // (JS form — no {{ }} braces). Falls back to appending if not focused.
+  function insertCodeVariable(name: string) {
+    const snippet = `vars.${name}`;
+    const el = codeExprRef.current;
+    const current = selectedNode?.data.config.expression ?? "";
+    if (!el) {
+      updateConfig("expression", current + snippet);
+    } else {
+      const start = el.selectionStart ?? current.length;
+      const end = el.selectionEnd ?? current.length;
+      const next = current.slice(0, start) + snippet + current.slice(end);
+      updateConfig("expression", next);
+      requestAnimationFrame(() => {
+        el.focus();
+        const pos = start + snippet.length;
+        el.setSelectionRange(pos, pos);
+      });
+    }
+    setShowCodeVars(false);
+    setCodeTestResult(null);
+  }
+
+  // ---------------------- CUSTOM CODE (TRANSFORM) TEST ----------------------
+  // Evaluate a Custom Code expression against sample values (each workflow
+  // variable's default), so the user can verify their code before publishing.
+  // The expression is run in a restricted Function scope with only `vars`
+  // available (no access to window/globals in scope). This is a client-side
+  // preview; the real run happens on the backend.
+  function testCustomCode(expression: string) {
+    const expr = (expression ?? "").trim();
+    if (!expr) {
+      setCodeTestResult({ ok: false, value: "Write an expression first." });
+      return;
+    }
+    // Build a sample `vars` object from declared variables' defaults, coerced
+    // to their declared type.
+    const vars: Record<string, any> = {};
+    for (const v of variables) {
+      const d = v.default ?? "";
+      if (v.type === "number") vars[v.name] = d === "" ? 0 : Number(d);
+      else if (v.type === "boolean") vars[v.name] = d === "true" || d === "1";
+      else vars[v.name] = d;
+    }
+    try {
+      // eslint-disable-next-line no-new-func
+      const fn = new Function("vars", `"use strict"; return (${expr});`);
+      const result = fn(vars);
+      const display =
+        typeof result === "object" ? JSON.stringify(result) : String(result);
+      setCodeTestResult({ ok: true, value: display });
+    } catch (err: any) {
+      setCodeTestResult({ ok: false, value: err?.message ?? "Evaluation error" });
+    }
   }
 
   // ---------------------- OPTIONS (BUTTONS/LIST) ----------------------
@@ -763,8 +828,15 @@ function BuilderInner() {
           if (e.sourceHandle) optionTargets[e.sourceHandle] = nameById[e.target] ?? "?";
         }
       }
+      // Safety net: React Flow crashes ("Received NaN for cx/cy/...") if any
+      // node has a non-finite position, so coerce it to a finite value.
+      const safePosition = {
+        x: Number.isFinite(n.position?.x) ? n.position.x : 0,
+        y: Number.isFinite(n.position?.y) ? n.position.y : 0,
+      };
       return {
         ...n,
+        position: safePosition,
         data: {
           ...n.data,
           onDelete: deleteNode,
@@ -2024,16 +2096,87 @@ function BuilderInner() {
 
             {selectedNode.data.nodeType === "TRANSFORM" && (
               <>
-                <label className="form-control">
-                  <span className="label-text">JS expression (use vars.name)</span>
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="block font-semibold text-slate-700 text-xs">JS expression (use vars.name)</span>
+                    {/* Insert a variable as vars.<name> (no braces) */}
+                    <div className="relative">
+                      <button
+                        type="button"
+                        onClick={() => setShowCodeVars((s) => !s)}
+                        className="inline-flex items-center gap-1 text-xs font-semibold text-teal-700 hover:text-teal-800"
+                      >
+                        <i className="ph-bold ph-brackets-curly text-[11px]" />
+                        Add variable
+                      </button>
+                      {showCodeVars && (
+                        <div className="absolute right-0 top-6 z-30 bg-white border border-slate-200 rounded-lg shadow-lg w-52 max-h-56 overflow-y-auto">
+                          {variables.length > 0 ? (
+                            variables.map((v) => (
+                              <button
+                                key={v.name}
+                                type="button"
+                                onClick={() => insertCodeVariable(v.name)}
+                                className="w-full text-left px-3 py-1.5 hover:bg-slate-50 text-xs flex items-center justify-between"
+                              >
+                                <span className="font-mono text-slate-800">vars.{v.name}</span>
+                                <span className="text-slate-400 text-[10px] ml-2">
+                                  {v.type === "text" ? "string" : v.type}
+                                </span>
+                              </button>
+                            ))
+                          ) : (
+                            <div className="px-3 py-2 text-xs text-slate-400">No variables yet.</div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
                   <textarea
-                    className="textarea textarea-bordered font-mono text-xs"
+                    ref={codeExprRef}
+                    className="textarea textarea-bordered font-mono text-xs w-full"
                     rows={3}
                     placeholder="vars.name.toUpperCase()"
                     value={selectedNode.data.config.expression ?? ""}
-                    onChange={(e) => updateConfig("expression", e.target.value)}
+                    onChange={(e) => { updateConfig("expression", e.target.value); setCodeTestResult(null); }}
                   />
-                </label>
+                </div>
+
+                {/* Test the expression against sample variable values */}
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => testCustomCode(selectedNode.data.config.expression ?? "")}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-900 text-white text-xs font-semibold transition active:scale-95"
+                  >
+                    <i className="ph-bold ph-play text-xs" />
+                    Test code
+                  </button>
+                  {codeTestResult && (
+                    <button
+                      type="button"
+                      onClick={() => setCodeTestResult(null)}
+                      className="text-xs text-slate-400 hover:text-slate-600"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+                {codeTestResult && (
+                  <div
+                    className={`rounded-lg border px-3 py-2 text-xs font-mono break-words ${
+                      codeTestResult.ok
+                        ? "bg-emerald-50 border-emerald-200 text-emerald-800"
+                        : "bg-rose-50 border-rose-200 text-rose-700"
+                    }`}
+                  >
+                    <span className="font-sans font-semibold mr-1">
+                      {codeTestResult.ok ? "Result:" : "Error:"}
+                    </span>
+                    {codeTestResult.value}
+                  </div>
+                )}
+
                 <label className="form-control">
                   <span className="label-text">Store result in variable</span>
                   <VariableSelect
@@ -2043,6 +2186,11 @@ function BuilderInner() {
                     onCreateVariable={ensureVariable}
                   />
                 </label>
+                <p className="text-xs text-base-content/50">
+                  Write a single JS expression. Read workflow variables with <code>vars.name</code>;
+                  the returned value is stored in the variable above. Test runs use each variable&apos;s
+                  default value as a sample.
+                </p>
                 <p className="text-xs text-base-content/50">
                   Examples: <code>vars.name.toUpperCase()</code>, <code>Number(vars.a) + Number(vars.b)</code>, <code>vars.first + " " + vars.last</code>
                 </p>
