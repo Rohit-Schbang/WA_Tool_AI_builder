@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 // A declared workflow variable (kept loose here to avoid a circular import).
 export interface WorkflowVariable {
@@ -30,15 +30,30 @@ export function VariableTextInput({
   value: string;
   onChange: (v: string) => void;
   variables: WorkflowVariable[];
-  onCreateVariable: (name: string) => void;
+  onCreateVariable: (name: string, type?: WorkflowVariable["type"]) => void;
   placeholder?: string;
   rows?: number;
   singleLine?: boolean;
 }) {
   const ref = useRef<HTMLTextAreaElement & HTMLInputElement>(null);
+  const toolbarRef = useRef<HTMLDivElement>(null);
   const [showVars, setShowVars] = useState(false);
   const [showEmoji, setShowEmoji] = useState(false);
   const [newName, setNewName] = useState("");
+  const [newType, setNewType] = useState<WorkflowVariable["type"]>("text");
+
+  // Close the variable / emoji popovers when clicking anywhere outside the toolbar.
+  useEffect(() => {
+    if (!showVars && !showEmoji) return;
+    function handlePointerDown(e: MouseEvent) {
+      if (toolbarRef.current && !toolbarRef.current.contains(e.target as Node)) {
+        setShowVars(false);
+        setShowEmoji(false);
+      }
+    }
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [showVars, showEmoji]);
 
   // Insert text at the current cursor position (or append if no focus).
   function insertAtCursor(text: string) {
@@ -83,9 +98,10 @@ export function VariableTextInput({
     // Strip braces from the name; we insert the {{ }} form ourselves.
     const name = newName.trim().replace(/[{}]/g, "").trim();
     if (!name) return;
-    onCreateVariable(name);
+    onCreateVariable(name, newType);
     insertVariable(name);
     setNewName("");
+    setNewType("text");
   }
 
   return (
@@ -110,7 +126,7 @@ export function VariableTextInput({
       )}
 
       {/* Toolbar */}
-      <div className="relative flex items-center gap-1 border-t border-base-200 px-1 py-1 bg-base-200/40">
+      <div ref={toolbarRef} className="relative flex items-center gap-1 border-t border-base-200 px-1 py-1 bg-base-200/40">
         <button type="button" title="Bold" onClick={() => wrapSelection("*")} className="btn btn-ghost btn-xs font-bold">B</button>
         <button type="button" title="Italic" onClick={() => wrapSelection("_")} className="btn btn-ghost btn-xs italic">I</button>
         <button type="button" title="Strikethrough" onClick={() => wrapSelection("~")} className="btn btn-ghost btn-xs line-through">S</button>
@@ -137,21 +153,32 @@ export function VariableTextInput({
               variables.map((v) => (
                 <button key={v.name} type="button" onClick={() => insertVariable(v.name)} className="w-full text-left px-3 py-1.5 hover:bg-base-200 text-sm font-mono">
                   {`{{${v.name}}}`}
-                  <span className="text-base-content/40 ml-2 font-sans text-xs">{v.type}</span>
+                  <span className="text-base-content/40 ml-2 font-sans text-xs">{v.type === "text" ? "string" : v.type}</span>
                 </button>
               ))
             ) : (
               <div className="px-3 py-2 text-xs text-base-content/50">No variables yet.</div>
             )}
-            <div className="border-t border-base-200 p-2 flex gap-1">
+            <div className="border-t border-base-200 p-2 flex flex-col gap-1">
               <input
-                className="input input-bordered input-xs flex-1"
+                className="input input-bordered input-xs w-full"
                 placeholder="new variable"
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter") createAndInsert(); }}
               />
-              <button type="button" onClick={createAndInsert} disabled={!newName.trim()} className="btn btn-xs btn-primary">Create</button>
+              <div className="flex gap-1">
+                <select
+                  className="select select-bordered select-xs flex-1"
+                  value={newType}
+                  onChange={(e) => setNewType(e.target.value as WorkflowVariable["type"])}
+                >
+                  <option value="text">string</option>
+                  <option value="number">number</option>
+                  <option value="boolean">boolean</option>
+                </select>
+                <button type="button" onClick={createAndInsert} disabled={!newName.trim()} className="btn btn-xs btn-primary">Create</button>
+              </div>
             </div>
           </div>
         )}
@@ -257,11 +284,12 @@ export function VariableSelect({
   value: string;
   onChange: (v: string) => void;
   variables: WorkflowVariable[];
-  onCreateVariable: (name: string) => void;
+  onCreateVariable: (name: string, type?: WorkflowVariable["type"]) => void;
   placeholder?: string;
 }) {
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
+  const [newType, setNewType] = useState<WorkflowVariable["type"]>("text");
 
   function handleSelect(v: string) {
     if (v === "__create__") {
@@ -275,9 +303,10 @@ export function VariableSelect({
     // Strip any {{ }} a user typed — destinations are bare names.
     const name = newName.trim().replace(/[{}]/g, "").trim();
     if (!name) return;
-    onCreateVariable(name);
+    onCreateVariable(name, newType);
     onChange(name);
     setNewName("");
+    setNewType("text");
     setCreating(false);
   }
 
@@ -296,22 +325,34 @@ export function VariableSelect({
           <option value="">{placeholder}</option>
           {hasValue && <option value={value}>{value}</option>}
           {variables.map((v) => (
-            <option key={v.name} value={v.name}>{v.name}</option>
+            <option key={v.name} value={v.name}>{v.name} ({v.type === "text" ? "string" : v.type})</option>
           ))}
           <option value="__create__">+ Create new variable…</option>
         </select>
       ) : (
-        <div className="flex gap-1">
+        <div className="flex flex-col gap-1.5">
           <input
             autoFocus
-            className="input input-bordered input-sm flex-1"
+            className="input input-bordered input-sm w-full"
             placeholder="new variable name"
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") createAndSelect(); if (e.key === "Escape") setCreating(false); }}
           />
-          <button type="button" onClick={createAndSelect} disabled={!newName.trim()} className="btn btn-sm btn-primary">Add</button>
-          <button type="button" onClick={() => setCreating(false)} className="btn btn-sm btn-ghost">✕</button>
+          <div className="flex items-center gap-1">
+            <select
+              className="select select-bordered select-sm flex-1"
+              value={newType}
+              onChange={(e) => setNewType(e.target.value as WorkflowVariable["type"])}
+              title="Variable type"
+            >
+              <option value="text">string</option>
+              <option value="number">number</option>
+              <option value="boolean">boolean</option>
+            </select>
+            <button type="button" onClick={createAndSelect} disabled={!newName.trim()} className="btn btn-sm btn-primary">Add</button>
+            <button type="button" onClick={() => setCreating(false)} className="btn btn-sm btn-ghost">✕</button>
+          </div>
         </div>
       )}
     </div>

@@ -86,6 +86,7 @@ export default function ConversationsPage() {
   const chatbotId = params.id as string;
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [botName, setBotName] = useState<string>("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
@@ -103,6 +104,11 @@ export default function ConversationsPage() {
       .then((res) => setConversations(res.data))
       .catch(() => {})
       .finally(() => setLoading(false));
+    // Fetch the chatbot's name for the page header.
+    api
+      .get(`/api/chatbots/${chatbotId}`)
+      .then((res) => setBotName(res.data.name ?? ""))
+      .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -161,7 +167,7 @@ export default function ConversationsPage() {
             <span>/</span>
             <span className="text-slate-700 font-semibold flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-teal-500"></span>
-              Conversations
+              {botName || "Conversations"}
             </span>
           </nav>
 
@@ -182,14 +188,18 @@ export default function ConversationsPage() {
           <section className="mb-4">
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-3">
               <div>
-                <h1 className="text-xl font-extrabold text-slate-900 tracking-tight flex items-center gap-2">
-                  Conversations &amp; Logs
+                <h1 className="text-xl font-extrabold text-slate-900 tracking-tight flex items-center gap-2 flex-wrap">
+                  {botName ? (
+                    <span className="text-teal-700">{botName}</span>
+                  ) : (
+                    "Conversations & Logs"
+                  )}
                   <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-200 text-slate-700 font-mono">
                     Bot ID: #{chatbotId.slice(0, 8)}
                   </span>
                 </h1>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Session history, collected variables, and message logs for this WhatsApp journey.
+                  {botName ? "Conversations & logs · " : ""}Session history, collected variables, and message logs for this WhatsApp journey.
                 </p>
               </div>
             </div>
