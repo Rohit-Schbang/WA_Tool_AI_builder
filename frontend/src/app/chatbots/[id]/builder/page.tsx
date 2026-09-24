@@ -1296,6 +1296,7 @@ function BuilderInner() {
             onConnectStart={onConnectStart}
             onConnectEnd={onConnectEnd}
             connectionMode={ConnectionMode.Loose}
+            connectionRadius={45}
             onNodeClick={onNodeClick}
             nodeTypes={nodeTypes}
             edgeTypes={edgeTypes}

@@ -100,22 +100,12 @@ export function WorkFlowNode({ id, data, selected }: NodeProps) {
                   while a connection is being dragged — see globals.css rule
                   keyed on `.react-flow__pane.connecting` / body.rf-connecting. */}
             {!isStart && (
-                <>
-                    <Handle
-                        type="target"
-                        position={Position.Top}
-                        id="node-drop"
-                        className="node-drop-target"
-                    />
-                    {/* Small visible dot as a visual cue */}
-                    <Handle
-                        type="target"
-                        position={Position.Top}
-                        id="in-dot"
-                        className={handleClass}
-                        isConnectableStart={false}
-                    />
-                </>
+                <Handle
+                    type="target"
+                    position={Position.Top}
+                    className={`${handleClass} node-target-dot`}
+                    isConnectableStart={false}
+                />
             )}
 
             {/* Colored header strip with icon + name */}
