@@ -278,6 +278,9 @@ input:-webkit-autofill:active {
   min-width: 0 !important;
   min-height: 0 !important;
   pointer-events: none;
+  /* Don't show the connection crosshair over the whole card — keep the
+     normal cursor. The small handle dots still show their own cursor. */
+  cursor: grab !important;
 }
 body.rf-connecting .node-drop-target {
   pointer-events: all;
