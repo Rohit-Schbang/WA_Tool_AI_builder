@@ -34,7 +34,6 @@ const TYPE_LABEL: Record<string, string> = {
     START: "Start",
     SEND_MESSAGE: "Send Message",
     ASK_INPUT: "Question",
-    INPUT_TYPE: "Input",
     BUTTONS: "Buttons",
     LIST: "List",
     CONDITION: "If / Else",
@@ -124,9 +123,6 @@ export function validateWorkflow(def: WorkflowDefinition): ValidationResult {
         }
         if (node.nodeType === "AI_RESPONSE" && !config.prompt) {
             push(`"${name}" is missing a prompt.`, node.id)
-        }
-        if (node.nodeType === "INPUT_TYPE" && !config.variable) {
-            push(`"${name}" is missing a variable to store the answer.`, node.id)
         }
         if (node.nodeType === "VALIDATE") {
             if ((config.mode ?? "expression") === "regex" && !config.pattern) {

@@ -22,12 +22,22 @@ export interface WorkflowVariable {
     default: string;
 }
 
+// A named CRUD endpoint defined inside a global API config.
+export interface ApiEndpoint {
+    id: string;
+    name: string;              // e.g. "Get user"
+    method: string;            // GET | POST | PUT | PATCH | DELETE
+    path: string;              // relative path (joined with baseUrl), supports {{vars}}
+    body?: string;             // request body template, supports {{vars}}
+}
+
 // A reusable global API configuration (#1) that API_REQUEST nodes reference
 // by name, so base URL + shared headers aren't repeated per node.
 export interface ApiConfig {
     name: string;
     baseUrl?: string;
     headers?: { key: string; value: string }[];
+    endpoints?: ApiEndpoint[];
 }
 
 export interface WorkflowDefinition {
