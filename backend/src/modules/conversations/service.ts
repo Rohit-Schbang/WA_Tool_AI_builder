@@ -142,15 +142,6 @@ export async function handleInboundMessage(
         context.incomingText = null;
     }
 
-    // [DIAG] Temporary diagnostic — remove once the resume issue is confirmed.
-    console.log("[handleInbound] resume debug:", {
-        conversationId: conversation.id,
-        savedCurrentNodeId: conversation.currentNodeId,
-        startNodeId,
-        incomingText: context.incomingText,
-        edges: (definition.edges ?? []).map((e: any) => ({ s: e.source, t: e.target, h: e.sourceHandle })),
-    });
-
     // Log the inbound message before running.
     await prisma.message.create({
         data: {
@@ -187,12 +178,6 @@ export async function handleInboundMessage(
         });
         return { status: "engine_error" };
     }
-
-    // [DIAG] Temporary diagnostic — remove once the resume issue is confirmed.
-    console.log("[handleInbound] engine result:", {
-        pausedAtNodeId: result.pausedAtNodeId,
-        status: result.status,
-    });
 
     // 6. Save the result back to the conversation.
     await prisma.conversation.update({
