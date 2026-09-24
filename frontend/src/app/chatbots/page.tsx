@@ -5,6 +5,7 @@ import { clearToken, getToken } from "@/lib/auth";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
+import { Sidebar } from "@/app/components/Sidebar";
 
 
 
@@ -27,6 +28,7 @@ export default function ChatbotsPage() {
     const [isLoading, setIsLoading] = useState(true)
     const [newName, setNewName] = useState("")
     const [error, setError] = useState("")
+    const [isCreating, setIsCreating] = useState(false)
 
     // UI-only state for the new dashboard search + status filter (does not affect data/logic)
     const [search, setSearch] = useState("")
@@ -50,10 +52,23 @@ export default function ChatbotsPage() {
 
     async function handleCreate(e: React.FormEvent) {
         e.preventDefault()
-        if (!newName.trim()) return
-        await api.post("/api/chatbots", { name: newName })                        // -------------------->>> Creation of chatBot
-        setNewName("")
-        loadBots()
+        if (!newName.trim() || isCreating) return
+        setIsCreating(true)
+        setError("")
+        try {
+            // Create the chatbot, then open its flow builder.
+            const res = await api.post("/api/chatbots", { name: newName.trim() })
+            const created: Chatbot = res.data
+            setNewName("")
+            if (created?.id) {
+                router.push(`/chatbots/${created.id}/builder`)
+            } else {
+                loadBots()
+            }
+        } catch (err) {
+            setError("Failed to create chatbot")
+            setIsCreating(false)
+        }
     }
 
     // ----------------------->>> Renaming the BOT
@@ -115,67 +130,7 @@ export default function ChatbotsPage() {
     return (
         <div className="bg-surface font-sans text-on-surface antialiased min-h-screen">
             {/* Sidebar */}
-            <aside className="fixed left-0 top-0 h-full w-72 bg-surface-container-lowest shadow-[0_1px_8px_rgba(0,0,0,0.04)] z-50 flex flex-col justify-between">
-                <div className="flex flex-col">
-                    <div className="h-16 px-space-lg flex items-center gap-space-sm">
-                        <div className="h-8 w-8 rounded-md bg-primary flex items-center justify-center text-on-primary shrink-0">
-                            <span className="material-symbols-outlined text-[20px]" style={{ fontVariationSettings: "'FILL' 1" }}>bolt</span>
-                        </div>
-                        <div className="flex flex-col">
-                            <span className="font-headline-sm text-headline-sm text-on-surface tracking-tight leading-none">PingFlow</span>
-                            <span className="font-label-sm text-label-sm text-on-surface-variant leading-tight mt-0.5">WhatsApp Automation</span>
-                        </div>
-                    </div>
-                    <div className="px-space-lg pt-space-xs pb-space-md">
-                        <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-surface-container text-primary font-label-sm text-label-sm">
-                            <span className="material-symbols-outlined text-[14px] text-primary">verified</span>
-                            <span>Enterprise Cloud API</span>
-                        </div>
-                    </div>
-                    <div className="px-space-md py-space-xs">
-                        <p className="px-space-sm pb-space-xs font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">Workspace Menu</p>
-                        <nav className="flex flex-col gap-1">
-                            <a className="group flex items-center gap-3 px-3 py-2.5 rounded-lg bg-primary-container text-on-primary-container font-semibold shadow-sm font-label-lg text-label-lg transition-all" href="#">
-                                <span className="material-symbols-outlined text-[20px]">account_tree</span>
-                                <span>Workflows &amp; Bots</span>
-                            </a>
-                            <a className="group flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant font-label-lg text-label-lg hover:bg-surface-container-high hover:text-on-surface transition-all" href="#">
-                                <span className="material-symbols-outlined text-[20px]">campaign</span>
-                                <span>Broadcasts</span>
-                            </a>
-                            <Link className="group flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant font-label-lg text-label-lg hover:bg-surface-container-high hover:text-on-surface transition-all" href="/contacts">
-                                <span className="material-symbols-outlined text-[20px]">group</span>
-                                <span>Contacts</span>
-                            </Link>
-                            <a className="group flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant font-label-lg text-label-lg hover:bg-surface-container-high hover:text-on-surface transition-all" href="#">
-                                <span className="material-symbols-outlined text-[20px]">analytics</span>
-                                <span>Analytics</span>
-                            </a>
-                            <a className="group flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant font-label-lg text-label-lg hover:bg-surface-container-high hover:text-on-surface transition-all" href="#">
-                                <span className="material-symbols-outlined text-[20px]">chat_bubble</span>
-                                <span>Templates</span>
-                            </a>
-                            <a className="group flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant font-label-lg text-label-lg hover:bg-surface-container-high hover:text-on-surface transition-all" href="#">
-                                <span className="material-symbols-outlined text-[20px]">settings</span>
-                                <span>Settings</span>
-                            </a>
-                        </nav>
-                    </div>
-                </div>
-                <div className="p-space-md m-space-md rounded-xl bg-surface-container-low">
-                    <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                            <span className="relative flex h-2.5 w-2.5">
-                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
-                                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-primary"></span>
-                            </span>
-                            <span className="font-label-sm text-label-sm text-on-surface font-semibold">Meta Cloud API</span>
-                        </div>
-                        <span className="font-label-sm text-label-sm text-primary font-semibold">v19.0</span>
-                    </div>
-                    <p className="mt-1 font-body-sm text-body-sm text-on-surface-variant">High concurrency tier enabled with zero queue delays.</p>
-                </div>
-            </aside>
+            <Sidebar active="workflows" />
 
             {/* Main area */}
             <div className="pl-72 flex flex-col min-h-screen">
@@ -226,14 +181,6 @@ export default function ChatbotsPage() {
                                     Create, test, and manage high-conversion customer conversation workflows on WhatsApp Cloud API.
                                 </p>
                             </div>
-                            <div className="flex items-center gap-2.5 self-start md:self-auto">
-                                <form onSubmit={handleCreate} className="inline-flex rounded-lg shadow-sm bg-primary hover:bg-primary-container transition-all">
-                                    <button type="submit" className="inline-flex items-center gap-2 px-4 py-2.5 text-on-primary font-label-lg text-label-lg font-semibold rounded-lg hover:opacity-95 transition-all">
-                                        <span className="material-symbols-outlined text-[20px]">add_circle</span>
-                                        <span>Create New Chatbot</span>
-                                    </button>
-                                </form>
-                            </div>
                         </div>
 
                         {/* 2. Quick launch */}
@@ -256,8 +203,12 @@ export default function ChatbotsPage() {
                                             type="text"
                                         />
                                     </div>
-                                    <button type="submit" className="h-11 px-5 rounded-xl bg-primary text-on-primary font-label-lg text-label-lg font-semibold inline-flex items-center gap-1.5 hover:bg-primary-container active:scale-[0.99] transition-all whitespace-nowrap shadow-sm">
-                                        <span>Create Flow</span>
+                                    <button
+                                        type="submit"
+                                        disabled={!newName.trim() || isCreating}
+                                        className="h-11 px-5 rounded-xl bg-primary text-on-primary font-label-lg text-label-lg font-semibold inline-flex items-center gap-1.5 hover:bg-primary-container active:scale-[0.99] transition-all whitespace-nowrap shadow-sm disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-primary disabled:active:scale-100"
+                                    >
+                                        <span>{isCreating ? "Creating..." : "Create Flow"}</span>
                                         <span className="material-symbols-outlined text-[18px]">arrow_forward</span>
                                     </button>
                                 </form>
@@ -435,11 +386,11 @@ export default function ChatbotsPage() {
                                                     <span>Chats Log</span>
                                                 </Link>
                                                 <Link
-                                                    href={`/chatbots/${bot.id}/settings`}
+                                                    href={`/chatbots/${bot.id}/analytics`}
                                                     className="inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-surface-container-high hover:bg-surface-container text-on-surface font-label-md text-label-md font-medium transition-all"
                                                 >
-                                                    <span className="material-symbols-outlined text-[16px]">tune</span>
-                                                    <span>Settings</span>
+                                                    <span className="material-symbols-outlined text-[16px]">insights</span>
+                                                    <span>Analytics</span>
                                                 </Link>
                                             </div>
                                             <div className="flex items-center gap-1">

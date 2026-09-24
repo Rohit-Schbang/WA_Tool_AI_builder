@@ -214,3 +214,44 @@ input:-webkit-autofill:active {
 .pf-scrollbar-none::-webkit-scrollbar {
   display: none;
 }
+
+/* ---- Conversations & Logs page (WhatsApp-style transcript viewer) ---- */
+
+/* Faint WhatsApp-style dot tint behind the transcript. */
+.pf-convo-canvas {
+  background-color: rgba(239, 234, 226, 0.4);
+}
+.pf-convo-dots {
+  background-image: radial-gradient(#0d9488 1px, transparent 1px);
+  background-size: 16px 16px;
+}
+
+/* Inbound (contact) bubble tail — left side. */
+.pf-bubble-in {
+  position: relative;
+}
+.pf-bubble-in::before {
+  content: "";
+  position: absolute;
+  left: -7px;
+  top: 0;
+  width: 0;
+  height: 0;
+  border-top: 8px solid #ffffff;
+  border-left: 7px solid transparent;
+}
+
+/* Outbound (bot) bubble tail — right side. */
+.pf-bubble-out {
+  position: relative;
+}
+.pf-bubble-out::after {
+  content: "";
+  position: absolute;
+  right: -7px;
+  top: 0;
+  width: 0;
+  height: 0;
+  border-top: 8px solid #005c4b;
+  border-right: 7px solid transparent;
+}
