@@ -4,7 +4,6 @@ const TITLE: Record<string, string> = {
     START: "Start",
     SEND_MESSAGE: "Message",
     ASK_INPUT: "Question",
-    INPUT_TYPE: "Input",
     CONDITION: "If / Else",
     SET_VARIABLE: "Set Variable",
     WAIT: "Delay",
@@ -21,7 +20,6 @@ const STYLE: Record<string, { icon: string; accent: string; ring: string; chip: 
     START: { icon: "▶", accent: "bg-emerald-500", ring: "border-emerald-200", chip: "text-emerald-600" },
     SEND_MESSAGE: { icon: "💬", accent: "bg-sky-500", ring: "border-sky-200", chip: "text-sky-600" },
     ASK_INPUT: { icon: "❓", accent: "bg-violet-500", ring: "border-violet-200", chip: "text-violet-600" },
-    INPUT_TYPE: { icon: "⌨️", accent: "bg-indigo-500", ring: "border-indigo-200", chip: "text-indigo-600" },
     BUTTONS: { icon: "🔘", accent: "bg-cyan-500", ring: "border-cyan-200", chip: "text-cyan-600" },
     LIST: { icon: "📋", accent: "bg-teal-500", ring: "border-teal-200", chip: "text-teal-600" },
     CONDITION: { icon: "🔀", accent: "bg-amber-500", ring: "border-amber-200", chip: "text-amber-600" },
@@ -47,7 +45,6 @@ export function WorkFlowNode({ id, data, selected }: NodeProps) {
     let preview = "";
     if (nodeType === "SEND_MESSAGE") preview = config.text || "No message";
     else if (nodeType === "ASK_INPUT") preview = config.text || "(no question)";
-    else if (nodeType === "INPUT_TYPE") preview = `${config.inputType ?? "text"} → ${config.variable || "(no var)"}`;
     else if (nodeType === "CONDITION") preview = config.field ? `${config.field} = ${config.value ?? ""}` : "(no condition)";
     else if (nodeType === "WAIT") preview = config.seconds ? `${config.seconds}s delay` : "(no delay)";
     else if (nodeType === "SET_VARIABLE") preview = config.variable ? `${config.variable} = ${config.value ?? ""}` : "(no variable)";
@@ -95,8 +92,31 @@ export function WorkFlowNode({ id, data, selected }: NodeProps) {
                 </button>
             )}
 
-            {/* Incoming handle */}
-            {!isStart && <Handle type="target" position={Position.Top} className={handleClass} />}
+            {/* Incoming connection target.
+                - A large, invisible handle covering the WHOLE card so a
+                  connection can be dropped anywhere on the node. It's
+                  pointer-events:none normally (so it doesn't block dragging/
+                  selecting the node) and only becomes an active drop zone
+                  while a connection is being dragged — see globals.css rule
+                  keyed on `.react-flow__pane.connecting` / body.rf-connecting. */}
+            {!isStart && (
+                <>
+                    <Handle
+                        type="target"
+                        position={Position.Top}
+                        id="node-drop"
+                        className="node-drop-target"
+                    />
+                    {/* Small visible dot as a visual cue */}
+                    <Handle
+                        type="target"
+                        position={Position.Top}
+                        id="in-dot"
+                        className={handleClass}
+                        isConnectableStart={false}
+                    />
+                </>
+            )}
 
             {/* Colored header strip with icon + name */}
             <div className={`flex items-center gap-2 px-3 py-2 rounded-t-2xl ${style.accent} text-white`}>

@@ -255,3 +255,38 @@ input:-webkit-autofill:active {
   border-top: 8px solid #005c4b;
   border-right: 7px solid transparent;
 }
+
+/* ---- Flow builder: connect-to-anywhere drop targets ----
+   Each node renders a full-size invisible target Handle (`.node-drop-target`).
+   At rest it must NOT capture pointer events (so nodes stay draggable/
+   clickable). Only while a connection is being dragged — signalled by
+   `body.rf-connecting`, toggled via onConnectStart/onConnectEnd — does it
+   become an active drop zone covering the whole card. This lets you release a
+   connection anywhere on the target node, not just on the small dot. */
+.node-drop-target {
+  position: absolute !important;
+  inset: 0 !important;
+  left: 0 !important;
+  top: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  transform: none !important;
+  border-radius: 1rem !important;
+  background: transparent !important;
+  border: 0 !important;
+  opacity: 0 !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  pointer-events: none;
+  /* Don't show the connection crosshair over the whole card — keep the
+     normal cursor. The small handle dots still show their own cursor. */
+  cursor: grab !important;
+}
+body.rf-connecting .node-drop-target {
+  pointer-events: all;
+}
+/* Subtle highlight on the hovered card while dragging a connection. */
+body.rf-connecting .react-flow__node:hover .node-drop-target {
+  background: rgba(20, 184, 166, 0.08) !important; /* teal tint */
+  box-shadow: inset 0 0 0 2px rgba(20, 184, 166, 0.5) !important;
+}

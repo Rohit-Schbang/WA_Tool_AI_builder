@@ -70,6 +70,45 @@ workflowsRouter.post("/publish", async (req: Request, res: Response) => {
 })
 
 
+// POST /api/chatbots/:chatbotId/workflow/ping
+// Server-side reachability check for a (third-party) URL. Runs from the backend
+// so it isn't blocked by browser CORS, and reflects whether the runtime (which
+// also calls from the backend) can reach the host. Any HTTP response = reachable
+// (green); only network errors / timeouts = unreachable (red).
+workflowsRouter.post("/ping", async (req: Request, res: Response) => {
+  const chatbotId = req.params.chatbotId;
+  const bot = await getChatbot(req.userId!, chatbotId);
+  if (!bot) return res.status(404).json({ error: "Chatbot not found" });
+
+  const { url, headers } = req.body ?? {};
+  if (!url || typeof url !== "string" || !/^https?:\/\//i.test(url)) {
+    return res.status(400).json({ ok: false, error: "A valid http(s) URL is required" });
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  const started = Date.now();
+  try {
+    const hdrs: Record<string, string> = {};
+    if (Array.isArray(headers)) {
+      for (const h of headers) if (h?.key) hdrs[h.key] = String(h.value ?? "");
+    }
+    // HEAD first (cheap); some servers reject HEAD, so fall back to GET.
+    let response: globalThis.Response;
+    try {
+      response = await fetch(url, { method: "HEAD", headers: hdrs, signal: controller.signal });
+    } catch {
+      response = await fetch(url, { method: "GET", headers: hdrs, signal: controller.signal });
+    }
+    clearTimeout(timer);
+    return res.json({ ok: true, reachable: true, status: response.status, ms: Date.now() - started });
+  } catch (err: any) {
+    clearTimeout(timer);
+    const timedOut = err?.name === "AbortError";
+    return res.json({ ok: true, reachable: false, error: timedOut ? "timeout" : String(err?.message ?? err) });
+  }
+});
+
 // POST /api/chatbots/:chatbotId/workflow/test
 // Web-based test: runs the REAL conversation path (published + active version),
 // creates a real logged conversation, and returns the bot's replies.
