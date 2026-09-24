@@ -1,5 +1,6 @@
 "use client";
 import { useParams } from "next/navigation";
+import Link from "next/link";
 import { api } from "@/lib/api";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactFlow, {
@@ -151,6 +152,40 @@ function checkBodyJson(body: string): { ok: boolean; hint?: string } {
   }
 }
 
+// Canonicalize a workflow definition (from the server or a local draft) down
+// to just the meaningful, comparable fields in a stable order. Used to decide
+// whether a local draft really differs from the server copy — comparing raw
+// JSON is unreliable because key ordering / incidental fields differ.
+function normalizeDefinition(def: any): string {
+  if (!def) return "";
+  const norm = {
+    variables: def.variables ?? [],
+    apiConfigs: def.apiConfigs ?? [],
+    nodes: (def.nodes ?? [])
+      .map((n: any) => ({
+        id: n.id,
+        nodeType: n.nodeType ?? n.data?.nodeType,
+        position: { x: Math.round(n.position?.x ?? 0), y: Math.round(n.position?.y ?? 0) },
+        config: n.config ?? n.data?.config ?? {},
+      }))
+      .sort((a: any, b: any) => String(a.id).localeCompare(String(b.id))),
+    edges: (def.edges ?? [])
+      .map((e: any) => ({
+        source: e.source,
+        target: e.target,
+        sourceHandle: e.sourceHandle ?? null,
+      }))
+      .sort((a: any, b: any) =>
+        `${a.source}-${a.sourceHandle}-${a.target}`.localeCompare(`${b.source}-${b.sourceHandle}-${b.target}`)
+      ),
+  };
+  try {
+    return JSON.stringify(norm);
+  } catch {
+    return "";
+  }
+}
+
 function isMultiOutput(node: { nodeType: string; config?: any }) {
   if (["CONDITION", "API_REQUEST", "LIST"].includes(node.nodeType)) return true;
   // Send Message is multi-output only when it has CTA (branching) buttons.
@@ -182,6 +217,12 @@ function BuilderInner() {
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
   const [publishing, setPublishing] = useState(false);
   const [publishMsg, setPublishMsg] = useState("");
+  // Whether the flow has unpublished changes; gates the Publish button. This is
+  // derived by comparing the current serialized definition to the baseline
+  // captured at load / after a successful save or publish, so React Flow's
+  // internal measurement changes on mount don't falsely mark the flow dirty.
+  const [dirtySincePublish, setDirtySincePublish] = useState(false);
+  const publishedBaselineRef = useRef<string>("");
   const [isActive, setIsActive] = useState(false);
   const [activating, setActivating] = useState(false);
   const [publishErrors, setPublishErrors] = useState<{ message: string; nodeId?: string }[]>([]);
@@ -330,6 +371,7 @@ function BuilderInner() {
     };
     setNodes((nds) => [...nds, newNode]);
     setSeqCounter((count) => count + 1);
+    // (Publish visibility is handled centrally by the change-tracking effect.)
     // auto-select + focus after the node is in the tree
     setTimeout(() => focusNode(id), 50);
   }
@@ -400,6 +442,13 @@ function BuilderInner() {
       await api.put(`/api/chatbots/${chatbotId}/workflow/draft`, { definition });
       // Keep the auto-save baseline in sync so it doesn't re-push immediately.
       autoSave.primeBaseline(definition);
+      // This is now the published/saved baseline -> Publish disables until the
+      // next edit.
+      publishedBaselineRef.current = JSON.stringify(definition);
+      setDirtySincePublish(false);
+      // Persisted to the server -> local backup is redundant; clearing it
+      // prevents a stale "restore unsaved changes" prompt on the next load.
+      clearLocalDraft(chatbotId);
       setSavedMsg("Saved");
     } catch (error) {
       setSavedMsg("Save Failed");
@@ -417,6 +466,26 @@ function BuilderInner() {
     try {
       const response = await api.post(`/api/chatbots/${chatbotId}/workflow/publish`, {});
       setPublishMsg(`Published v${response.data.version}`);
+      // Publishing consumes the current changes: disable Publish until the next
+      // edit.
+      const definition = buildDefinition();
+      publishedBaselineRef.current = JSON.stringify(definition);
+      setDirtySincePublish(false);
+      // The draft is now persisted+published to the server, so the local
+      // backup is redundant. Clear it and re-baseline so the "restore unsaved
+      // changes" prompt doesn't reappear on the next load.
+      autoSave.primeBaseline(definition);
+      clearLocalDraft(chatbotId);
+      // Publishing makes the bot live -> activate it so the toggle turns on
+      // (and it shows as Active on the dashboard).
+      if (!isActive) {
+        try {
+          const res = await api.patch(`/api/chatbots/${chatbotId}/activate`, { isActive: true });
+          setIsActive(res.data.isActive);
+        } catch {
+          setIsActive(true);
+        }
+      }
     } catch (error: any) {
       if (error.response?.status === 422) {
         setPublishErrors(error.response.data.details ?? []);
@@ -447,6 +516,9 @@ function BuilderInner() {
 
   // Connect the selected node to another node (#6 — "Connect to node").
   // Creates an edge from selected -> target (single-output nodes only).
+  // Max number of plain (null-handle) connections a single-output node may have.
+  const MAX_CONNECTIONS = 3;
+
   function connectToNode(targetId: string) {
     if (!selectedId || targetId === selectedId) return;
     setEdges((eds) => {
@@ -455,9 +527,42 @@ function BuilderInner() {
         (e) => e.source === selectedId && e.target === targetId && (e.sourceHandle ?? null) === null
       );
       if (exists) return eds;
+      // Enforce the max-connections limit for plain (null-handle) edges.
+      const current = eds.filter(
+        (e) => e.source === selectedId && (e.sourceHandle ?? null) === null
+      ).length;
+      if (current >= MAX_CONNECTIONS) return eds;
       return addEdge(
         { id: makeId(), source: selectedId, target: targetId, sourceHandle: null },
         eds
+      );
+    });
+  }
+
+  // Remove a plain (null-handle) connection from the selected node to a target.
+  function disconnectFromNode(targetId: string) {
+    if (!selectedId) return;
+    setEdges((eds) =>
+      eds.filter(
+        (e) => !(e.source === selectedId && e.target === targetId && (e.sourceHandle ?? null) === null)
+      )
+    );
+  }
+
+  // Connect a specific option (button/list row) of the selected node to a
+  // target node. The edge's sourceHandle is the option id so it branches from
+  // that option's handle on the canvas. Passing an empty targetId clears it.
+  function connectOptionToNode(optionId: string, targetId: string) {
+    if (!selectedId) return;
+    setEdges((eds) => {
+      // Remove any existing edge from this option's handle first.
+      const withoutOption = eds.filter(
+        (e) => !(e.source === selectedId && e.sourceHandle === optionId)
+      );
+      if (!targetId || targetId === selectedId) return withoutOption;
+      return addEdge(
+        { id: makeId(), source: selectedId, target: targetId, sourceHandle: optionId },
+        withoutOption
       );
     });
   }
@@ -513,12 +618,12 @@ function BuilderInner() {
   }
   // Create a variable by name if it doesn't already exist (used by the inline
   // "+ Add variable" / "create new" shortcuts in fields).
-  function ensureVariable(name: string) {
+  function ensureVariable(name: string, type: WorkflowVariable["type"] = "text") {
     // Normalize: variable names are bare (no {{ }} braces).
     const trimmed = name.trim().replace(/[{}]/g, "").trim();
     if (!trimmed) return;
     setVariables((vs) =>
-      vs.some((v) => v.name === trimmed) ? vs : [...vs, { name: trimmed, type: "text", default: "" }]
+      vs.some((v) => v.name === trimmed) ? vs : [...vs, { name: trimmed, type, default: "" }]
     );
   }
 
@@ -781,9 +886,29 @@ function BuilderInner() {
   // ---------------------- LOAD DRAFT ----------------------
   // #11 — on any change to the persisted state, write to localStorage
   // (debounced inside the hook). Only active after initial load.
+  const baselineCaptured = useRef(false);
   useEffect(() => {
-    if (autoReady) autoSave.touch();
-  }, [nodes, edges, variables, apiConfigs, autoReady, autoSave]);
+    if (!autoReady) return;
+    const current = JSON.stringify(buildDefinition());
+    // First run after the flow is ready: capture the loaded state as the
+    // baseline so Publish starts disabled (nothing to publish yet). We prime
+    // the auto-save baseline from this same canonical serialization so a raw
+    // server-def vs buildDefinition() shape mismatch never writes a spurious
+    // local draft (which was causing the "restore unsaved changes" prompt to
+    // appear even when nothing was edited).
+    if (!baselineCaptured.current) {
+      baselineCaptured.current = true;
+      publishedBaselineRef.current = current;
+      autoSave.primeBaseline(buildDefinition());
+      setDirtySincePublish(false);
+      return;
+    }
+    autoSave.touch();
+    // Enable Publish only when the serialized definition actually differs from
+    // the baseline. Comparing the persisted shape (not raw React Flow state)
+    // avoids false positives from mount-time node measurements.
+    setDirtySincePublish(current !== publishedBaselineRef.current);
+  }, [nodes, edges, variables, apiConfigs, autoReady, autoSave, buildDefinition]);
 
   useEffect(() => {
     async function loadDraft() {
@@ -799,19 +924,25 @@ function BuilderInner() {
         .then((res) => setIsActive(res.data.isActive))
         .catch(() => { });
 
-      // #11 — recover a local draft if it differs from the server copy
-      // (protects against an accidental refresh/close before the 30s sync).
+      // #11 — recover a local draft only if it MEANINGFULLY differs from the
+      // server copy (protects against an accidental refresh/close before the
+      // 30s sync). We normalize both sides so incidental JSON shape/ordering
+      // differences don't trigger a false "restore unsaved changes" prompt.
       const local = readLocalDraft(chatbotId);
-      const serverJson = serverDef ? JSON.stringify(serverDef) : "";
-      const localJson = local ? JSON.stringify(local.definition) : "";
+      const serverNorm = normalizeDefinition(serverDef);
+      const localNorm = local ? normalizeDefinition(local.definition) : "";
 
-      if (local && localJson && localJson !== serverJson) {
+      if (local && localNorm && localNorm !== serverNorm) {
         // Show a styled modal instead of window.confirm.
         setRestorePrompt({ localDef: local.definition, serverDef, savedAt: local.savedAt });
         // Load the server copy underneath so the canvas isn't blank while asking.
         if (serverDef) hydrateDefinition(serverDef);
         return; // autoReady is set once the user chooses in the modal
       }
+
+      // A local draft exists but doesn't meaningfully differ (e.g. a stale
+      // draft written by an earlier version): drop it so it can't re-prompt.
+      if (local) clearLocalDraft(chatbotId);
 
       if (serverDef) {
         hydrateDefinition(serverDef);
@@ -830,6 +961,11 @@ function BuilderInner() {
     // Baseline = server copy, so the restored local changes are detected as a
     // diff and re-synced on the next tick / save.
     autoSave.primeBaseline(restorePrompt.serverDef ?? { nodes: [], edges: [] });
+    // Restored local changes are genuinely unpublished: force the baseline to
+    // a non-matching value so Publish is enabled.
+    baselineCaptured.current = true;
+    publishedBaselineRef.current = "__restored__";
+    setDirtySincePublish(true);
     setSavedMsg("Restored unsaved changes");
     setRestorePrompt(null);
     setAutoReady(true);
@@ -850,6 +986,13 @@ function BuilderInner() {
       {/* Main header row */}
       <header className="h-14 bg-white border-b border-slate-200 px-4 flex items-center justify-between shrink-0 z-30">
         <div className="flex items-center space-x-2 shrink-0">
+          <Link
+            href="/chatbots"
+            title="Back to chatbots"
+            className="flex items-center justify-center w-8 h-8 rounded-lg border border-slate-200 text-slate-500 hover:text-slate-900 hover:bg-slate-50 transition active:scale-95 mr-0.5"
+          >
+            <i className="ph-bold ph-arrow-left text-sm" />
+          </Link>
           <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-brand-600 to-teal-400 flex items-center justify-center text-white shadow-xs">
             <i className="ph-bold ph-chat-teardrop-dots text-base" />
           </div>
@@ -934,8 +1077,9 @@ function BuilderInner() {
 
           <button
             onClick={handlePublish}
-            disabled={publishing}
-            className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg bg-brand-600 hover:bg-brand-700 text-xs font-semibold text-white transition active:scale-95 shadow-sm shadow-brand-600/30 disabled:opacity-60"
+            disabled={publishing || !dirtySincePublish}
+            title={!dirtySincePublish ? "No changes to publish" : undefined}
+            className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg bg-brand-600 hover:bg-brand-700 text-xs font-semibold text-white transition active:scale-95 shadow-sm shadow-brand-600/30 disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:bg-brand-600 disabled:active:scale-100"
           >
             <i className="ph-bold ph-paper-plane-tilt text-xs" />
             <span>{publishing ? "Publishing..." : "Publish"}</span>
@@ -1158,24 +1302,62 @@ function BuilderInner() {
             </div>
 
             {/* #6 — Connect to node */}
-            {!isMultiOutput({ nodeType: selectedNode.data.nodeType, config: selectedNode.data.config }) && otherNodes.length > 0 && (
-              <div className="space-y-1.5">
-                <span className="block font-semibold text-slate-700">Connect to node</span>
-                <div className="relative">
-                  <select
-                    className="w-full appearance-none px-3 py-2 text-xs rounded-lg border border-slate-300 bg-white text-slate-700 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500 font-medium cursor-pointer pr-8"
-                    value=""
-                    onChange={(e) => { if (e.target.value) connectToNode(e.target.value); }}
-                  >
-                    <option value="">Connect this node to…</option>
-                    {otherNodes.map((n) => (
-                      <option key={n.id} value={n.id}>{nodeName(n)}</option>
-                    ))}
-                  </select>
-                  <i className="ph-bold ph-caret-down absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 text-[10px] pointer-events-none" />
+            {!isMultiOutput({ nodeType: selectedNode.data.nodeType, config: selectedNode.data.config }) && otherNodes.length > 0 && (() => {
+              // Plain (null-handle) connections from this node -> targets.
+              const connectedTargetIds = edges
+                .filter((e) => e.source === selectedId && (e.sourceHandle ?? null) === null)
+                .map((e) => e.target);
+              const atLimit = connectedTargetIds.length >= MAX_CONNECTIONS;
+              // Only offer nodes that aren't already connected.
+              const selectable = otherNodes.filter((n) => !connectedTargetIds.includes(n.id));
+              return (
+                <div className="space-y-1.5">
+                  <span className="block font-semibold text-slate-700">
+                    Connect to node <span className="text-slate-400 font-normal">({connectedTargetIds.length}/{MAX_CONNECTIONS})</span>
+                  </span>
+                  <div className="relative">
+                    <select
+                      className="w-full appearance-none px-3 py-2 text-xs rounded-lg border border-slate-300 bg-white text-slate-700 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500 font-medium cursor-pointer pr-8 disabled:bg-slate-50 disabled:text-slate-400 disabled:cursor-not-allowed"
+                      value=""
+                      disabled={atLimit || selectable.length === 0}
+                      onChange={(e) => { if (e.target.value) connectToNode(e.target.value); }}
+                    >
+                      <option value="">{atLimit ? "Max 3 nodes connected" : "Connect this node to…"}</option>
+                      {selectable.map((n) => (
+                        <option key={n.id} value={n.id}>{nodeName(n)}</option>
+                      ))}
+                    </select>
+                    <i className="ph-bold ph-caret-down absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 text-[10px] pointer-events-none" />
+                  </div>
+                  {/* Connected nodes shown as removable tags */}
+                  {connectedTargetIds.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      {connectedTargetIds.map((tid) => {
+                        const n = nodes.find((x) => x.id === tid);
+                        if (!n) return null;
+                        return (
+                          <span
+                            key={tid}
+                            className="inline-flex items-center gap-1 pl-2.5 pr-1.5 py-1 rounded-full bg-teal-50 border border-teal-200 text-teal-700 text-[11px] font-medium"
+                          >
+                            <i className="ph-bold ph-arrow-right text-[9px]" />
+                            {nodeName(n)}
+                            <button
+                              type="button"
+                              onClick={() => disconnectFromNode(tid)}
+                              className="w-4 h-4 rounded-full hover:bg-teal-200/70 flex items-center justify-center text-teal-600 hover:text-teal-800 transition-colors"
+                              title="Remove connection"
+                            >
+                              <i className="ph-bold ph-x text-[9px]" />
+                            </button>
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
-              </div>
-            )}
+              );
+            })()}
 
             <div className="h-px bg-slate-200" />
 
@@ -1306,6 +1488,10 @@ function BuilderInner() {
                 {(selectedNode.data.config.buttons ?? []).map((b: any, idx: number) => {
                   const target = (nodesForFlow.find((n) => n.id === selectedId)?.data.optionTargets ?? {})[b.id];
                   const kind = b.kind ?? "cta";
+                  // Currently-connected target node id for this CTA button (from edges),
+                  // used to reflect/select the value in the "Connect to node" dropdown.
+                  const btnTargetId =
+                    edges.find((e) => e.source === selectedId && e.sourceHandle === b.id)?.target ?? "";
                   return (
                     <div
                       key={b.id}
@@ -1385,14 +1571,27 @@ function BuilderInner() {
                           </div>
                         ) : (
                           <div>
-                            <label className="text-[10px] font-semibold text-slate-500 block mb-0.5">Connected Branch</label>
-                            <div className="text-[11px] px-2.5 py-1 rounded border border-slate-200 bg-white">
+                            <label className="text-[10px] font-semibold text-slate-500 block mb-0.5">Connect to node</label>
+                            <div className="relative">
+                              <select
+                                className="w-full appearance-none px-2.5 py-1.5 text-xs leading-tight rounded border border-slate-200 bg-white text-slate-700 focus:outline-none focus:border-teal-500 pr-6"
+                                value={btnTargetId}
+                                onChange={(e) => connectOptionToNode(b.id, e.target.value)}
+                              >
+                                <option value="">Connect this button to…</option>
+                                {otherNodes.map((n) => (
+                                  <option key={n.id} value={n.id}>{nodeName(n)}</option>
+                                ))}
+                              </select>
+                              <i className="ph-bold ph-caret-down absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 text-[9px] pointer-events-none" />
+                            </div>
+                            <div className="text-[11px] mt-1">
                               {target ? (
                                 <span className="text-emerald-600 font-medium flex items-center gap-1">
                                   <i className="ph-bold ph-check text-[10px]" /> Connected → {target}
                                 </span>
                               ) : (
-                                <span className="text-slate-400">Not connected — drag from this button on the canvas</span>
+                                <span className="text-slate-400">Not connected — pick a node above or drag from this button on the canvas</span>
                               )}
                             </div>
                           </div>
@@ -1728,6 +1927,10 @@ function BuilderInner() {
                 </div>
                 {(selectedNode.data.config.rows ?? []).map((r: any, idx: number) => {
                   const target = (nodesForFlow.find((n) => n.id === selectedId)?.data.optionTargets ?? {})[r.id];
+                  // Currently-connected target node id for this row (from edges),
+                  // used to reflect/select the value in the "Connect to node" dropdown.
+                  const rowTargetId =
+                    edges.find((e) => e.source === selectedId && e.sourceHandle === r.id)?.target ?? "";
                   return (
                     <div
                       key={r.id}
@@ -1764,7 +1967,7 @@ function BuilderInner() {
                           <input
                             className="w-full bg-white text-slate-800 font-medium rounded border border-slate-200 px-2.5 py-1.5 focus:outline-none focus:border-teal-500 placeholder:font-normal placeholder:text-slate-400"
                             style={{ fontSize: "12px", lineHeight: "16px" }}
-                            placeholder="Row label..."
+                            placeholder="Button label..."
                             value={r.label}
                             onChange={(e) => updateOption(r.id, e.target.value)}
                           />
@@ -1777,13 +1980,29 @@ function BuilderInner() {
                           <i className="ph-bold ph-x text-xs" />
                         </button>
                       </div>
+                      <div>
+                        <label className="text-[10px] font-semibold text-slate-500 block mb-0.5">Connect to node</label>
+                        <div className="relative">
+                          <select
+                            className="w-full appearance-none px-2.5 py-1.5 text-xs leading-tight rounded border border-slate-200 bg-white text-slate-700 focus:outline-none focus:border-teal-500 pr-6"
+                            value={rowTargetId}
+                            onChange={(e) => connectOptionToNode(r.id, e.target.value)}
+                          >
+                            <option value="">Connect this node to…</option>
+                            {otherNodes.map((n) => (
+                              <option key={n.id} value={n.id}>{nodeName(n)}</option>
+                            ))}
+                          </select>
+                          <i className="ph-bold ph-caret-down absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 text-[9px] pointer-events-none" />
+                        </div>
+                      </div>
                       <div className="text-[11px]">
                         {target ? (
                           <span className="text-emerald-600 font-medium flex items-center gap-1">
                             <i className="ph-bold ph-check text-[10px]" /> Connected → {target}
                           </span>
                         ) : (
-                          <span className="text-slate-400">Not connected — drag from this row on the canvas</span>
+                          <span className="text-slate-400">Not connected — pick a node above or drag from this row on the canvas</span>
                         )}
                       </div>
                     </div>
@@ -2134,7 +2353,7 @@ function BuilderInner() {
 
       {/* #2 — View Variables modal (overlay, does not shift the canvas) */}
       {showVarList && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 transition-all" onClick={() => setShowVarList(false)}>
+        <div className="fixed inset-0 z-[70] bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 transition-all" onClick={() => setShowVarList(false)}>
           <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xl w-[600px] max-w-full max-h-[68vh] overflow-hidden flex flex-col font-sans" onClick={(e) => e.stopPropagation()}>
             {/* Header */}
             <div className="p-6 pb-4 border-b border-slate-100 flex items-center justify-between">
@@ -2198,7 +2417,7 @@ function BuilderInner() {
                                 : "bg-slate-100 text-slate-600"
                             }`}
                           >
-                            {v.type}
+                            {v.type === "text" ? "string" : v.type}
                           </span>
                         </td>
                         <td className="py-3.5">
@@ -2279,44 +2498,89 @@ function BuilderInner() {
 
       {/* #2 — Add Variable modal */}
       {showVarAdd && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setShowVarAdd(false)}>
-          <div className="bg-base-100 rounded-lg shadow-xl w-[420px] p-5" onClick={(e) => e.stopPropagation()}>
-            <h3 className="font-bold text-lg mb-4">Add Variable</h3>
-            <div className="flex flex-col gap-3">
-              <label className="form-control">
-                <span className="label-text">Variable name</span>
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={() => setShowVarAdd(false)}>
+          <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xl w-[440px] max-w-full overflow-hidden font-sans" onClick={(e) => e.stopPropagation()}>
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
+              <div className="flex items-center space-x-3">
+                <div className="w-9 h-9 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center shadow-xs">
+                  <i className="ph-bold ph-brackets-curly text-lg" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900 tracking-tight">Add Variable</h3>
+                  <p className="text-xs text-slate-500 mt-0.5">Declare a new variable for this automation flow</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowVarAdd(false)}
+                className="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-400 hover:text-slate-700 transition"
+                title="Close modal"
+              >
+                <i className="ph-bold ph-x text-sm" />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-5 flex flex-col gap-4 text-xs">
+              <div className="space-y-1.5">
+                <label className="block font-semibold text-slate-700">Variable name</label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-mono text-xs">#</span>
+                  <input
+                    autoFocus
+                    className="w-full pl-7 pr-3 py-2.5 rounded-lg border border-slate-300 bg-white text-slate-800 font-mono font-medium focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500 transition-colors placeholder:font-sans placeholder:text-slate-400"
+                    placeholder="e.g. order_id"
+                    value={newVar.name}
+                    onChange={(e) => setNewVar((v) => ({ ...v, name: e.target.value }))}
+                    onKeyDown={(e) => { if (e.key === "Enter") saveNewVariable(); }}
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="block font-semibold text-slate-700">Data type</label>
+                <div className="relative">
+                  <select
+                    className="w-full appearance-none px-3 py-2.5 rounded-lg border border-slate-300 bg-white text-slate-700 font-medium focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500 cursor-pointer pr-8 transition-colors"
+                    value={newVar.type}
+                    onChange={(e) => setNewVar((v) => ({ ...v, type: e.target.value as WorkflowVariable["type"] }))}
+                  >
+                    {VARIABLE_TYPES.map((t) => <option key={t} value={t}>{t === "text" ? "string" : t}</option>)}
+                  </select>
+                  <i className="ph-bold ph-caret-down absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 text-[10px] pointer-events-none" />
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="block font-semibold text-slate-700">
+                  Default value <span className="text-slate-400 font-normal">(optional)</span>
+                </label>
                 <input
-                  autoFocus
-                  className="input input-bordered"
-                  placeholder="e.g. order_id"
-                  value={newVar.name}
-                  onChange={(e) => setNewVar((v) => ({ ...v, name: e.target.value }))}
-                  onKeyDown={(e) => { if (e.key === "Enter") saveNewVariable(); }}
-                />
-              </label>
-              <label className="form-control">
-                <span className="label-text">Data type</span>
-                <select
-                  className="select select-bordered"
-                  value={newVar.type}
-                  onChange={(e) => setNewVar((v) => ({ ...v, type: e.target.value as WorkflowVariable["type"] }))}
-                >
-                  {VARIABLE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-                </select>
-              </label>
-              <label className="form-control">
-                <span className="label-text">Default value (optional)</span>
-                <input
-                  className="input input-bordered"
+                  className="w-full px-3 py-2.5 rounded-lg border border-slate-300 bg-white text-slate-800 font-medium focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500 transition-colors placeholder:text-slate-400"
                   placeholder="default value"
                   value={newVar.default}
                   onChange={(e) => setNewVar((v) => ({ ...v, default: e.target.value }))}
+                  onKeyDown={(e) => { if (e.key === "Enter") saveNewVariable(); }}
                 />
-              </label>
-              <div className="flex justify-end gap-2 mt-2">
-                <button onClick={() => setShowVarAdd(false)} className="btn btn-sm btn-ghost">Cancel</button>
-                <button onClick={saveNewVariable} disabled={!newVar.name.trim()} className="btn btn-sm btn-primary">Save</button>
               </div>
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center justify-end gap-2.5 px-5 py-4 bg-slate-50 border-t border-slate-100">
+              <button
+                onClick={() => setShowVarAdd(false)}
+                className="px-4 py-2 rounded-lg text-xs font-semibold text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveNewVariable}
+                disabled={!newVar.name.trim()}
+                className="px-4 py-2 rounded-lg text-xs font-semibold text-white bg-teal-600 hover:bg-teal-700 shadow-xs transition disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-teal-600 inline-flex items-center gap-1.5"
+              >
+                <i className="ph-bold ph-check text-xs" />
+                Save Variable
+              </button>
             </div>
           </div>
         </div>
@@ -2325,7 +2589,7 @@ function BuilderInner() {
       {/* #1 — Global API Configs modal */}
       {showApiCfg && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4"
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4"
           onClick={() => setShowApiCfg(false)}
         >
           <div
