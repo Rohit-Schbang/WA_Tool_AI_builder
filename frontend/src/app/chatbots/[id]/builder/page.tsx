@@ -19,6 +19,7 @@ import { WorkFlowNode } from "./workflow.Node";
 import { TestPanel } from "./testPanel";
 import { VariableTextInput, VariableSelect, NoReplyFallback } from "./VariableInputs";
 import { layoutGraph } from "./autoLayout";
+import { useAutoSave, readLocalDraft, clearLocalDraft } from "./useAutoSave";
 
 // Map React Flow node type name -> our custom component.
 const nodeTypes = { workflow: WorkFlowNode };
@@ -201,6 +202,13 @@ function BuilderInner() {
   const [apiCfgSearch, setApiCfgSearch] = useState("");
   const [revealedHeaders, setRevealedHeaders] = useState<Record<string, boolean>>({});
 
+  // #11 — pending "restore unsaved local changes?" prompt (styled modal).
+  // Holds the local + server definitions and a savedAt timestamp until the
+  // user chooses. null = no prompt showing.
+  const [restorePrompt, setRestorePrompt] = useState<
+    { localDef: any; serverDef: any; savedAt: number } | null
+  >(null);
+
   const params = useParams();
   const chatbotId = params.id as string;
 
@@ -208,7 +216,17 @@ function BuilderInner() {
   const rfRef = useRef<ReactFlowInstance | null>(null);
 
   const onConnect = useCallback(
-    (connection: Connection) => setEdges((eds) => addEdge({ ...connection, type: "smoothstep" }, eds)),
+    (connection: Connection) => {
+      // Nothing may connect INTO the START node — an edge targeting START
+      // creates a loop (e.g. Question -> START re-runs the flow). Block it.
+      if (connection.target === "start") {
+        window.alert("You can't connect a node back into the Start node.");
+        return;
+      }
+      // A node shouldn't connect to itself.
+      if (connection.source === connection.target) return;
+      setEdges((eds) => addEdge({ ...connection, type: "smoothstep" }, eds));
+    },
     [setEdges]
   );
 
@@ -286,30 +304,72 @@ function BuilderInner() {
     setTimeout(() => focusNode(id), 50);
   }
 
+  // ---------------------- SERIALIZE ----------------------
+  // Build the workflow definition from current state. Shared by manual save,
+  // publish, and auto-save (#11) so all three persist the exact same shape.
+  const buildDefinition = useCallback(() => ({
+    version: 1,
+    variables, // #2 — workflow-level variables
+    apiConfigs, // #1 — global API configs
+    nodes: nodes.map((node) => ({
+      id: node.id,
+      nodeType: node.data.nodeType,
+      seq: node.data.seq,
+      position: node.position,
+      config: node.data.config ?? {},
+    })),
+    edges: edges.map((edge) => ({
+      id: edge.id,
+      source: edge.source,
+      target: edge.target,
+      sourceHandle: edge.sourceHandle ?? null,
+    })),
+  }), [nodes, edges, variables, apiConfigs]);
+
+  // Auto-save hook (#11): localStorage immediate + 30s DB sync.
+  const [autoReady, setAutoReady] = useState(false);
+  const autoSave = useAutoSave(chatbotId, buildDefinition, autoReady);
+
+  // Hydrate builder state from a definition object (server or local draft).
+  const hydrateDefinition = useCallback((def: any) => {
+    const loadedNodes: Node[] = (def.nodes ?? []).map((node: any, i: number) => ({
+      id: node.id,
+      type: "workflow",
+      position: {
+        x: Number.isFinite(node.position?.x) ? node.position.x : 300,
+        y: Number.isFinite(node.position?.y) ? node.position.y : 40 + i * 140,
+      },
+      data: {
+        nodeType: node.nodeType,
+        config: node.config ?? {},
+        seq: node.seq,
+        onDelete: deleteNode,
+      },
+    }));
+    const loadedEdges: Edge[] = (def.edges ?? []).map((edge: any) => ({
+      id: edge.id,
+      source: edge.source,
+      target: edge.target,
+      sourceHandle: edge.sourceHandle ?? undefined,
+      type: "smoothstep",
+    }));
+    setNodes(loadedNodes);
+    setEdges(loadedEdges);
+    if (Array.isArray(def.variables)) setVariables(def.variables);
+    if (Array.isArray(def.apiConfigs)) setApiConfigs(def.apiConfigs);
+    const maxSeq = (def.nodes ?? []).reduce((m: number, n: any) => Math.max(m, n.seq ?? 0), 0);
+    setSeqCounter(maxSeq + 1);
+  }, [deleteNode, setNodes, setEdges]);
+
   // ---------------------- SAVE DRAFT ----------------------
   async function handleSave() {
     setSaving(true);
     setSavedMsg("");
-    const definition = {
-      version: 1,
-      variables, // #2 — persist workflow-level variables
-      apiConfigs, // #1 — persist global API configs
-      nodes: nodes.map((node) => ({
-        id: node.id,
-        nodeType: node.data.nodeType,
-        seq: node.data.seq,
-        position: node.position,
-        config: node.data.config ?? {},
-      })),
-      edges: edges.map((edge) => ({
-        id: edge.id,
-        source: edge.source,
-        target: edge.target,
-        sourceHandle: edge.sourceHandle ?? null,
-      })),
-    };
+    const definition = buildDefinition();
     try {
       await api.put(`/api/chatbots/${chatbotId}/workflow/draft`, { definition });
+      // Keep the auto-save baseline in sync so it doesn't re-push immediately.
+      autoSave.primeBaseline(definition);
       setSavedMsg("Saved");
     } catch (error) {
       setSavedMsg("Save Failed");
@@ -662,52 +722,67 @@ function BuilderInner() {
   }
 
   // ---------------------- LOAD DRAFT ----------------------
+  // #11 — on any change to the persisted state, write to localStorage
+  // (debounced inside the hook). Only active after initial load.
+  useEffect(() => {
+    if (autoReady) autoSave.touch();
+  }, [nodes, edges, variables, apiConfigs, autoReady, autoSave]);
+
   useEffect(() => {
     async function loadDraft() {
+      let serverDef: any = null;
       try {
         const response = await api.get(`/api/chatbots/${chatbotId}/workflow/draft`);
-        const def = response.data.definition;
-
-        const loadedNodes: Node[] = def.nodes.map((node: any, i: number) => ({
-          id: node.id,
-          type: "workflow",
-          position: {
-            x: Number.isFinite(node.position?.x) ? node.position.x : 300,
-            y: Number.isFinite(node.position?.y) ? node.position.y : 40 + i * 140,
-          },
-          data: {
-            nodeType: node.nodeType,
-            config: node.config ?? {},
-            seq: node.seq,
-            onDelete: deleteNode,
-          },
-        }));
-
-        const loadedEdges: Edge[] = def.edges.map((edge: any) => ({
-          id: edge.id,
-          source: edge.source,
-          target: edge.target,
-          sourceHandle: edge.sourceHandle ?? undefined,
-          type: "smoothstep",
-        }));
-
-        api.get(`/api/chatbots/${chatbotId}`)
-          .then((res) => setIsActive(res.data.isActive))
-          .catch(() => { });
-
-        setNodes(loadedNodes);
-        setEdges(loadedEdges);
-        if (Array.isArray(def.variables)) setVariables(def.variables);
-        if (Array.isArray(def.apiConfigs)) setApiConfigs(def.apiConfigs);
-
-        const maxSeq = def.nodes.reduce((m: number, n: any) => Math.max(m, n.seq ?? 0), 0);
-        setSeqCounter(maxSeq + 1);
-      } catch (error) {
-        /* no draft yet — keep default START */
+        serverDef = response.data.definition;
+      } catch {
+        /* no server draft yet */
       }
+
+      api.get(`/api/chatbots/${chatbotId}`)
+        .then((res) => setIsActive(res.data.isActive))
+        .catch(() => { });
+
+      // #11 — recover a local draft if it differs from the server copy
+      // (protects against an accidental refresh/close before the 30s sync).
+      const local = readLocalDraft(chatbotId);
+      const serverJson = serverDef ? JSON.stringify(serverDef) : "";
+      const localJson = local ? JSON.stringify(local.definition) : "";
+
+      if (local && localJson && localJson !== serverJson) {
+        // Show a styled modal instead of window.confirm.
+        setRestorePrompt({ localDef: local.definition, serverDef, savedAt: local.savedAt });
+        // Load the server copy underneath so the canvas isn't blank while asking.
+        if (serverDef) hydrateDefinition(serverDef);
+        return; // autoReady is set once the user chooses in the modal
+      }
+
+      if (serverDef) {
+        hydrateDefinition(serverDef);
+        autoSave.primeBaseline(serverDef);
+      }
+      setAutoReady(true);
     }
     loadDraft();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // #11 — restore-prompt handlers.
+  function handleRestoreLocal() {
+    if (!restorePrompt) return;
+    hydrateDefinition(restorePrompt.localDef);
+    // Baseline = server copy, so the restored local changes are detected as a
+    // diff and re-synced on the next tick / save.
+    autoSave.primeBaseline(restorePrompt.serverDef ?? { nodes: [], edges: [] });
+    setSavedMsg("Restored unsaved changes");
+    setRestorePrompt(null);
+    setAutoReady(true);
+  }
+  function handleDiscardLocal() {
+    clearLocalDraft(chatbotId);
+    if (restorePrompt?.serverDef) autoSave.primeBaseline(restorePrompt.serverDef);
+    setRestorePrompt(null);
+    setAutoReady(true);
+  }
 
   // Other nodes for the "Go To Node" dropdown (#6).
   const otherNodes = nodes.filter((n) => n.id !== selectedId);
@@ -766,6 +841,30 @@ function BuilderInner() {
             <span className={`w-1.5 h-1.5 rounded-full ${isActive ? "bg-amber-500" : "bg-emerald-500"} ${!isActive ? "animate-pulse" : ""}`} />
             <span>{activating ? "..." : isActive ? "Deactivate" : "Activate"}</span>
           </button>
+
+          {/* #11 — auto-save status */}
+          <span
+            className={`flex items-center gap-1 text-[11px] font-medium ${
+              autoSave.status === "error" ? "text-rose-500"
+              : autoSave.status === "syncing" ? "text-amber-500"
+              : autoSave.status === "local" ? "text-slate-400"
+              : "text-emerald-500"
+            }`}
+            title="Auto-save: changes are kept locally and synced to the server every 30s"
+          >
+            <i className={`ph-fill ${
+              autoSave.status === "error" ? "ph-warning-circle"
+              : autoSave.status === "syncing" ? "ph-cloud-arrow-up"
+              : autoSave.status === "local" ? "ph-cloud"
+              : "ph-cloud-check"
+            } text-xs`} />
+            <span>{
+              autoSave.status === "error" ? "Sync failed – retrying"
+              : autoSave.status === "syncing" ? "Syncing…"
+              : autoSave.status === "local" ? "Unsaved (local)"
+              : "All changes saved"
+            }</span>
+          </span>
 
           <button
             onClick={handleSave}
@@ -2101,6 +2200,45 @@ function BuilderInner() {
                   Tip: Reference any variable in message nodes using{" "}
                   <code className="font-mono text-slate-800 font-semibold bg-white px-1.5 py-0.5 rounded border border-slate-200 text-[11px]">{"{{variable_name}}"}</code>
                 </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* #11 — Restore unsaved changes modal (styled, replaces window.confirm) */}
+      {restorePrompt && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden">
+            <div className="h-1.5 w-full bg-gradient-to-r from-amber-500 via-amber-400 to-orange-300" />
+            <div className="p-6">
+              <div className="flex items-start space-x-3.5">
+                <div className="w-11 h-11 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center shadow-sm shrink-0">
+                  <i className="ph-bold ph-clock-counter-clockwise text-2xl" />
+                </div>
+                <div className="flex-1">
+                  <h2 className="text-lg font-extrabold text-slate-900 tracking-tight">Restore unsaved changes?</h2>
+                  <p className="text-sm text-slate-500 mt-1">
+                    We found changes from your last session that weren&apos;t synced to the server
+                    {restorePrompt.savedAt ? ` (${new Date(restorePrompt.savedAt).toLocaleString()})` : ""}.
+                    Restore them, or discard and use the saved version?
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center justify-end space-x-2.5 mt-6">
+                <button
+                  onClick={handleDiscardLocal}
+                  className="px-4 py-2 rounded-lg text-xs font-semibold text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition"
+                >
+                  Discard local
+                </button>
+                <button
+                  onClick={handleRestoreLocal}
+                  className="flex items-center space-x-1.5 bg-brand-600 hover:bg-brand-700 text-white text-xs font-semibold px-5 py-2 rounded-lg shadow-sm transition active:scale-95"
+                >
+                  <i className="ph-bold ph-arrow-counter-clockwise text-sm" />
+                  <span>Restore changes</span>
+                </button>
               </div>
             </div>
           </div>

@@ -82,6 +82,16 @@ export function validateWorkflow(def: WorkflowDefinition): ValidationResult {
         if (!nodeIds.has(edge.target)) push(`A connection has an unknown target node.`, edge.target)
     }
 
+    // 3b. Nothing may connect INTO a START node — this creates a loop that
+    //     re-runs the flow (e.g. Question -> START re-asks the question).
+    const startIds = new Set(starts.map((s) => s.id));
+    for (const edge of edges) {
+        if (startIds.has(edge.target)) {
+            const src = nodes.find((n) => n.id === edge.source);
+            push(`"${src ? nodeName(src) : edge.source}" connects back into the Start node — remove that connection.`, edge.source)
+        }
+    }
+
     // 4. No orphan nodes: every node except START must be reachable — either
     //    via an incoming edge, or as a no-reply fallback target (#fallback).
     const targeted = new Set(edges.map((edge) => edge.target))
@@ -112,8 +122,8 @@ export function validateWorkflow(def: WorkflowDefinition): ValidationResult {
         if (node.nodeType === "SET_VARIABLE" && !config.variable) {
             push(`"${name}" is missing a variable name.`, node.id)
         }
-        if (node.nodeType === "AI_RESPONSE" && !config.variable) {
-            push(`"${name}" is missing a variable name.`, node.id)
+        if (node.nodeType === "AI_RESPONSE" && !config.prompt) {
+            push(`"${name}" is missing a prompt.`, node.id)
         }
         if (node.nodeType === "INPUT_TYPE" && !config.variable) {
             push(`"${name}" is missing a variable to store the answer.`, node.id)
