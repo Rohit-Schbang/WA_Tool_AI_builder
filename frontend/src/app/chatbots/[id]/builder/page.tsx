@@ -9,6 +9,7 @@ import ReactFlow, {
   useNodesState,
   useEdgesState,
   ReactFlowProvider,
+  ConnectionMode,
   type Connection,
   type Edge,
   type Node,
@@ -16,6 +17,7 @@ import ReactFlow, {
 } from "reactflow";
 import "reactflow/dist/style.css";
 import { WorkFlowNode } from "./workflow.Node";
+import { DeletableEdge } from "./DeletableEdge";
 import { TestPanel } from "./testPanel";
 import { VariableTextInput, VariableSelect, NoReplyFallback } from "./VariableInputs";
 import { layoutGraph } from "./autoLayout";
@@ -24,12 +26,14 @@ import { useAutoSave, readLocalDraft, clearLocalDraft } from "./useAutoSave";
 // Map React Flow node type name -> our custom component.
 const nodeTypes = { workflow: WorkFlowNode };
 
+// Custom edge with an inline ✕ delete button (no browser confirm).
+const edgeTypes = { deletable: DeletableEdge };
+
 // END removed (#8): a flow terminates naturally at a node with no outgoing edge.
 // BUTTONS removed (#10): reply buttons are now part of the Send Message node.
 const NODE_TYPES = [
   "SEND_MESSAGE",
   "ASK_INPUT",
-  "INPUT_TYPE",
   "LIST",
   "CONDITION",
   "AI_RESPONSE",
@@ -51,10 +55,18 @@ interface WorkflowVariable {
 const VARIABLE_TYPES = ["text", "number", "boolean"] as const;
 
 // #1 — a reusable global API configuration.
+interface ApiEndpoint {
+  id: string;
+  name: string;
+  method: string;   // GET | POST | PUT | PATCH | DELETE
+  path: string;     // relative to baseUrl, supports {{vars}}
+  body?: string;    // request body template, supports {{vars}}
+}
 interface ApiConfig {
   name: string;
   baseUrl: string;
   headers: { key: string; value: string }[];
+  endpoints?: ApiEndpoint[];
 }
 
 // Human-friendly default names per type (#3).
@@ -62,7 +74,6 @@ const TYPE_LABEL: Record<string, string> = {
   START: "Start",
   SEND_MESSAGE: "Send Message",
   ASK_INPUT: "Question",
-  INPUT_TYPE: "Input",
   BUTTONS: "Buttons",
   LIST: "List",
   CONDITION: "If / Else",
@@ -87,7 +98,6 @@ const PALETTE_GROUPS: {
     label: "Triggers & Input",
     items: [
       { type: "ASK_INPUT", icon: "ph-chat-circle-dots", accent: "bg-emerald-100 text-emerald-700" },
-      { type: "INPUT_TYPE", icon: "ph-keyboard", accent: "bg-emerald-100 text-emerald-700" },
     ],
   },
   {
@@ -225,10 +235,27 @@ function BuilderInner() {
       }
       // A node shouldn't connect to itself.
       if (connection.source === connection.target) return;
-      setEdges((eds) => addEdge({ ...connection, type: "smoothstep" }, eds));
+      // The connect-anywhere overlay reports targetHandle "node-drop"; the
+      // small dot reports "in-dot". Normalize both to a single incoming edge
+      // (target handle null) so we never create duplicate/confusing handles.
+      const normalized: Connection = {
+        ...connection,
+        targetHandle: null,
+      };
+      setEdges((eds) => addEdge({ ...normalized, type: "deletable" }, eds));
     },
     [setEdges]
   );
+
+  // Toggle a body class while a connection is being dragged, so each node's
+  // full-card invisible drop target becomes active (see globals.css). This is
+  // what lets you release a connection anywhere on the target node.
+  const onConnectStart = useCallback(() => {
+    document.body.classList.add("rf-connecting");
+  }, []);
+  const onConnectEnd = useCallback(() => {
+    document.body.classList.remove("rf-connecting");
+  }, []);
 
   // Current auto-layout direction, so the Vertical/Horizontal toggle can
   // highlight the active option.
@@ -276,16 +303,19 @@ function BuilderInner() {
   function addNode(nodeType: WorkflowNodeType) {
     const seq = seqCounter;
     const id = makeId();
-    // Place near the current viewport center so it's visible.
-    const rf = rfRef.current;
-    let position = { x: 200 + Math.random() * 150, y: 200 + Math.random() * 150 };
-    if (rf) {
-      const center = rf.screenToFlowPosition
-        ? rf.screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
-        : null;
-      if (center && Number.isFinite(center.x) && Number.isFinite(center.y)) {
-        position = { x: center.x, y: center.y };
-      }
+    // Place the new node just BELOW the current bottom-most node (aligned to
+    // its x), so nodes stack predictably and don't overlap. Not connected.
+    const NODE_GAP_Y = 140;
+    let position: { x: number; y: number };
+    if (nodes.length > 0) {
+      const bottom = nodes.reduce((lowest, n) =>
+        (n.position?.y ?? 0) > (lowest.position?.y ?? 0) ? n : lowest, nodes[0]);
+      position = {
+        x: Number.isFinite(bottom.position?.x) ? bottom.position.x : 300,
+        y: (Number.isFinite(bottom.position?.y) ? bottom.position.y : 40) + NODE_GAP_Y,
+      };
+    } else {
+      position = { x: 300, y: 40 };
     }
     const newNode: Node = {
       id,
@@ -351,7 +381,7 @@ function BuilderInner() {
       source: edge.source,
       target: edge.target,
       sourceHandle: edge.sourceHandle ?? undefined,
-      type: "smoothstep",
+      type: "deletable",
     }));
     setNodes(loadedNodes);
     setEdges(loadedEdges);
@@ -600,6 +630,40 @@ function BuilderInner() {
     setApiConfigs((cs) => cs.map((c, i) => (i === idx ? { ...c, headers: c.headers.filter((_, j) => j !== hIdx) } : c)));
   }
 
+  // --- CRUD endpoints inside a global API config ---
+  function addApiEndpoint(idx: number) {
+    const ep: ApiEndpoint = { id: "ep_" + Math.random().toString(36).slice(2, 8), name: "", method: "GET", path: "", body: "" };
+    setApiConfigs((cs) => cs.map((c, i) => (i === idx ? { ...c, endpoints: [...(c.endpoints ?? []), ep] } : c)));
+  }
+  function updateApiEndpoint(idx: number, epIdx: number, patch: Partial<ApiEndpoint>) {
+    setApiConfigs((cs) =>
+      cs.map((c, i) =>
+        i === idx ? { ...c, endpoints: (c.endpoints ?? []).map((e, j) => (j === epIdx ? { ...e, ...patch } : e)) } : c
+      )
+    );
+  }
+  function removeApiEndpoint(idx: number, epIdx: number) {
+    setApiConfigs((cs) => cs.map((c, i) => (i === idx ? { ...c, endpoints: (c.endpoints ?? []).filter((_, j) => j !== epIdx) } : c)));
+  }
+
+  // --- Ping a config's base URL (server-side reachability, avoids CORS) ---
+  // pingState[configIndex] = "idle" | "pinging" | "up" | "down"
+  const [pingState, setPingState] = useState<Record<number, "idle" | "pinging" | "up" | "down">>({});
+  async function pingApiConfig(idx: number) {
+    const cfg = apiConfigs[idx];
+    if (!cfg?.baseUrl) return;
+    setPingState((s) => ({ ...s, [idx]: "pinging" }));
+    try {
+      const res = await api.post(`/api/chatbots/${chatbotId}/workflow/ping`, {
+        url: cfg.baseUrl,
+        headers: cfg.headers,
+      });
+      setPingState((s) => ({ ...s, [idx]: res.data?.reachable ? "up" : "down" }));
+    } catch {
+      setPingState((s) => ({ ...s, [idx]: "down" }));
+    }
+  }
+
   // Update an arbitrary field on an option (e.g. kind, url) (#10).
   function updateOptionField(optId: string, field: string, value: any) {
     setNodes((nds) =>
@@ -630,11 +694,8 @@ function BuilderInner() {
     if (selectedId) deleteNode(selectedId);
   }
 
-  const onEdgeClick = useCallback((_: React.MouseEvent, edge: Edge) => {
-    if (window.confirm("Delete this connection?")) {
-      setEdges((eds) => eds.filter((e) => e.id !== edge.id));
-    }
-  }, [setEdges]);
+  // Edge deletion is handled by the inline ✕ button on each edge
+  // (see DeletableEdge). No click-to-confirm needed.
 
   // ---------------------- DERIVED: node display name helper ----------------------
   const nodeName = useCallback((n: Node) => {
@@ -692,12 +753,8 @@ function BuilderInner() {
       const label = labelFor(e.source, e.sourceHandle);
       return {
         ...e,
-        type: e.type ?? "smoothstep",
+        type: "deletable",
         label,
-        labelStyle: { fontSize: 10, fontWeight: 600, fill: "#475569" },
-        labelBgStyle: { fill: "#fff", fillOpacity: 0.9 },
-        labelBgPadding: [4, 2] as [number, number],
-        labelBgBorderRadius: 4,
       };
     });
   }, [edges, nodes]);
@@ -1020,10 +1077,13 @@ function BuilderInner() {
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
+            onConnectStart={onConnectStart}
+            onConnectEnd={onConnectEnd}
+            connectionMode={ConnectionMode.Loose}
             onNodeClick={onNodeClick}
-            onEdgeClick={onEdgeClick}
             nodeTypes={nodeTypes}
-            defaultEdgeOptions={{ type: "smoothstep" }}
+            edgeTypes={edgeTypes}
+            defaultEdgeOptions={{ type: "deletable" }}
             onInit={(inst) => { rfRef.current = inst; }}
             proOptions={{ hideAttribution: true }}
             fitView
@@ -1742,68 +1802,6 @@ function BuilderInner() {
               </>
             )}
 
-            {selectedNode.data.nodeType === "INPUT_TYPE" && (
-              <>
-                <label className="form-control">
-                  <span className="label-text">Prompt text</span>
-                  <VariableTextInput
-                    value={selectedNode.data.config.text ?? ""}
-                    onChange={(v) => updateConfig("text", v)}
-                    variables={variables}
-                    onCreateVariable={ensureVariable}
-                    placeholder="e.g. What's your email?"
-                  />
-                </label>
-                <label className="form-control">
-                  <span className="label-text">Expected input type</span>
-                  <select
-                    className="select select-bordered select-sm"
-                    value={selectedNode.data.config.inputType ?? "text"}
-                    onChange={(e) => updateConfig("inputType", e.target.value)}
-                  >
-                    <option value="text">Text</option>
-                    <option value="number">Number</option>
-                    <option value="email">Email</option>
-                    <option value="phone">Phone number</option>
-                    <option value="image">Image (URL)</option>
-                    <option value="video">Video (URL)</option>
-                    <option value="document">Document (URL)</option>
-                    <option value="location">Location (lat,lng)</option>
-                  </select>
-                </label>
-                <label className="form-control">
-                  <span className="label-text">Store answer in variable</span>
-                  <VariableSelect
-                    value={selectedNode.data.config.variable ?? ""}
-                    onChange={(v) => updateConfig("variable", v)}
-                    variables={variables}
-                    onCreateVariable={ensureVariable}
-                  />
-                </label>
-                <label className="form-control">
-                  <span className="label-text">Invalid input message (optional)</span>
-                  <VariableTextInput
-                    value={selectedNode.data.config.invalidMessage ?? ""}
-                    onChange={(v) => updateConfig("invalidMessage", v)}
-                    variables={variables}
-                    onCreateVariable={ensureVariable}
-                    singleLine
-                    placeholder="That doesn't look right. Try again."
-                  />
-                </label>
-
-                {/* No-response timeout fallback */}
-                <NoReplyFallback
-                  node={selectedNode}
-                  otherNodes={otherNodes}
-                  nodeName={nodeName}
-                  updateConfig={updateConfig}
-                  variables={variables}
-                  onCreateVariable={ensureVariable}
-                />
-              </>
-            )}
-
             {selectedNode.data.nodeType === "TRANSFORM" && (
               <>
                 <label className="form-control">
@@ -1838,12 +1836,42 @@ function BuilderInner() {
                   <select
                     className="select select-bordered select-sm"
                     value={selectedNode.data.config.apiConfig ?? ""}
-                    onChange={(e) => updateConfig("apiConfig", e.target.value)}
+                    onChange={(e) => { updateConfig("apiConfig", e.target.value); updateConfig("endpointId", ""); }}
                   >
                     <option value="">None</option>
                     {apiConfigs.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
                   </select>
                 </label>
+                {/* Endpoint picker — appears when the chosen config has endpoints.
+                    Selecting one auto-fills method / URL (path) / body. */}
+                {(() => {
+                  const cfg = apiConfigs.find((c) => c.name === selectedNode.data.config.apiConfig);
+                  const eps = cfg?.endpoints ?? [];
+                  if (eps.length === 0) return null;
+                  return (
+                    <label className="form-control">
+                      <span className="label-text">Endpoint (from config)</span>
+                      <select
+                        className="select select-bordered select-sm"
+                        value={selectedNode.data.config.endpointId ?? ""}
+                        onChange={(e) => {
+                          const ep = eps.find((x) => x.id === e.target.value);
+                          updateConfig("endpointId", e.target.value);
+                          if (ep) {
+                            updateConfig("method", ep.method);
+                            updateConfig("url", ep.path);
+                            if (ep.body) updateConfig("body", ep.body);
+                          }
+                        }}
+                      >
+                        <option value="">Custom (set below)</option>
+                        {eps.map((ep) => (
+                          <option key={ep.id} value={ep.id}>{ep.method} — {ep.name || ep.path}</option>
+                        ))}
+                      </select>
+                    </label>
+                  );
+                })()}
                 <div className="flex gap-2">
                   <label className="form-control w-28">
                     <span className="label-text">Method</span>
@@ -1874,6 +1902,7 @@ function BuilderInner() {
                     variables={variables}
                     onCreateVariable={ensureVariable}
                     singleLine
+                    hideFormatting
                     placeholder="https://api.example.com/users/{{id}}"
                   />
                 </label>
@@ -1891,6 +1920,7 @@ function BuilderInner() {
                         variables={variables}
                         onCreateVariable={ensureVariable}
                         singleLine
+                        hideFormatting
                         placeholder="value"
                       />
                     </div>
@@ -1912,6 +1942,7 @@ function BuilderInner() {
                         variables={variables}
                         onCreateVariable={ensureVariable}
                         singleLine
+                        hideFormatting
                         placeholder="value"
                       />
                     </div>
@@ -1930,6 +1961,7 @@ function BuilderInner() {
                       variables={variables}
                       onCreateVariable={ensureVariable}
                       rows={3}
+                      hideFormatting
                       placeholder={'{ "name": "{{name}}" }'}
                     />
                     {(() => {
@@ -2413,19 +2445,45 @@ function BuilderInner() {
                         </div>
                       </div>
 
-                      {/* Base URL */}
+                      {/* Base URL + Ping */}
                       <div className="space-y-1.5">
                         <label className="text-[11px] font-semibold text-slate-600 flex items-center gap-1.5">
                           <span>Base URL</span>
                           <span className="text-slate-400 font-normal">(Inherited by all sub-endpoints)</span>
                         </label>
-                        <input
-                          className="w-full bg-slate-50 px-3.5 py-2 text-xs text-slate-800 rounded-lg focus:outline-none focus:bg-white focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 border border-slate-200 font-mono transition"
-                          placeholder="https://api.example.com"
-                          value={c.baseUrl}
-                          onChange={(e) => updateApiConfig(i, { baseUrl: e.target.value })}
-                          type="text"
-                        />
+                        <div className="flex items-center gap-2">
+                          <input
+                            className="flex-1 bg-slate-50 px-3.5 py-2 text-xs text-slate-800 rounded-lg focus:outline-none focus:bg-white focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 border border-slate-200 font-mono transition"
+                            placeholder="https://api.example.com"
+                            value={c.baseUrl}
+                            onChange={(e) => updateApiConfig(i, { baseUrl: e.target.value })}
+                            type="text"
+                          />
+                          {/* status dot */}
+                          <span
+                            className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                              pingState[i] === "up" ? "bg-emerald-500"
+                              : pingState[i] === "down" ? "bg-rose-500"
+                              : pingState[i] === "pinging" ? "bg-amber-400 animate-pulse"
+                              : "bg-slate-300"
+                            }`}
+                            title={
+                              pingState[i] === "up" ? "Reachable"
+                              : pingState[i] === "down" ? "Unreachable"
+                              : pingState[i] === "pinging" ? "Checking…"
+                              : "Not checked"
+                            }
+                          />
+                          <button
+                            onClick={() => pingApiConfig(i)}
+                            disabled={!c.baseUrl || pingState[i] === "pinging"}
+                            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-200 text-[11px] font-semibold text-slate-600 hover:bg-slate-50 transition disabled:opacity-50"
+                            title="Test if this URL / server is reachable"
+                          >
+                            <i className="ph-bold ph-broadcast text-sm" />
+                            <span>{pingState[i] === "pinging" ? "Pinging…" : "Ping"}</span>
+                          </button>
+                        </div>
                       </div>
 
                       {/* Shared headers */}
@@ -2498,6 +2556,86 @@ function BuilderInner() {
                           <i className="ph-fill ph-shield-check text-sm text-brand-600" />
                           <span>Encrypted at rest &amp; automatically merged with payload headers on outgoing calls.</span>
                         </p>
+                      </div>
+
+                      {/* CRUD endpoints */}
+                      <div className="pt-1 space-y-2.5 border-t border-slate-100">
+                        <div className="flex items-center justify-between pt-3">
+                          <div className="flex items-center space-x-2">
+                            <span className="text-xs font-semibold text-slate-800">Endpoints (CRUD)</span>
+                            <span className="px-2 py-0.5 rounded text-[11px] bg-slate-100 text-slate-500 font-mono">
+                              {(c.endpoints ?? []).length}
+                            </span>
+                          </div>
+                          <button
+                            onClick={() => addApiEndpoint(i)}
+                            className="flex items-center space-x-1 text-brand-600 hover:text-brand-700 text-[11px] font-semibold transition"
+                          >
+                            <i className="ph-bold ph-plus-circle text-sm" />
+                            <span>Add Endpoint</span>
+                          </button>
+                        </div>
+
+                        {(c.endpoints ?? []).map((ep, k) => {
+                          const showBody = ["POST", "PUT", "PATCH"].includes(ep.method);
+                          const methodColor =
+                            ep.method === "GET" ? "text-emerald-700 bg-emerald-50"
+                            : ep.method === "DELETE" ? "text-rose-700 bg-rose-50"
+                            : "text-amber-700 bg-amber-50";
+                          return (
+                            <div key={ep.id} className="rounded-lg border border-slate-200 bg-slate-50/70 p-3 space-y-2">
+                              <div className="flex items-center gap-2">
+                                <select
+                                  className={`text-[11px] font-bold rounded-md px-2 py-1.5 border border-slate-200 focus:outline-none ${methodColor}`}
+                                  value={ep.method}
+                                  onChange={(e) => updateApiEndpoint(i, k, { method: e.target.value })}
+                                >
+                                  {["GET", "POST", "PUT", "PATCH", "DELETE"].map((m) => <option key={m} value={m}>{m}</option>)}
+                                </select>
+                                <input
+                                  className="flex-1 bg-white border border-slate-200 px-2.5 py-1.5 text-xs text-slate-800 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-500/20"
+                                  placeholder="Endpoint name (e.g. Get user)"
+                                  value={ep.name}
+                                  onChange={(e) => updateApiEndpoint(i, k, { name: e.target.value })}
+                                />
+                                <button
+                                  onClick={() => removeApiEndpoint(i, k)}
+                                  className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition"
+                                  title="Remove endpoint"
+                                >
+                                  <i className="ph ph-x text-base" />
+                                </button>
+                              </div>
+                              {/* Path — supports variables (no formatting/emoji) */}
+                              <VariableTextInput
+                                value={ep.path}
+                                onChange={(v) => updateApiEndpoint(i, k, { path: v })}
+                                variables={variables}
+                                onCreateVariable={ensureVariable}
+                                singleLine
+                                hideFormatting
+                                placeholder="/users/{{id}}  (relative to base URL)"
+                              />
+                              {/* Body — for write methods, supports variables */}
+                              {showBody && (
+                                <VariableTextInput
+                                  value={ep.body ?? ""}
+                                  onChange={(v) => updateApiEndpoint(i, k, { body: v })}
+                                  variables={variables}
+                                  onCreateVariable={ensureVariable}
+                                  rows={2}
+                                  hideFormatting
+                                  placeholder={'{ "name": "{{f_name}}" }'}
+                                />
+                              )}
+                            </div>
+                          );
+                        })}
+                        {(c.endpoints ?? []).length === 0 && (
+                          <p className="text-[11px] text-slate-400">
+                            Define reusable operations (e.g. GET /users/{"{{id}}"}, POST /users). API nodes can pick one instead of retyping the URL.
+                          </p>
+                        )}
                       </div>
                     </div>
                   ))

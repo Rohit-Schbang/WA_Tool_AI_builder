@@ -26,6 +26,7 @@ export function VariableTextInput({
   placeholder,
   rows = 3,
   singleLine = false,
+  hideFormatting = false,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -34,6 +35,9 @@ export function VariableTextInput({
   placeholder?: string;
   rows?: number;
   singleLine?: boolean;
+  // Hide the B/I/S + emoji formatting controls (e.g. for API paths/bodies
+  // where WhatsApp markdown & emoji don't apply). Keeps only "+ Add variable".
+  hideFormatting?: boolean;
 }) {
   const ref = useRef<HTMLTextAreaElement & HTMLInputElement>(null);
   const [showVars, setShowVars] = useState(false);
@@ -111,18 +115,22 @@ export function VariableTextInput({
 
       {/* Toolbar */}
       <div className="relative flex items-center gap-1 border-t border-base-200 px-1 py-1 bg-base-200/40">
-        <button type="button" title="Bold" onClick={() => wrapSelection("*")} className="btn btn-ghost btn-xs font-bold">B</button>
-        <button type="button" title="Italic" onClick={() => wrapSelection("_")} className="btn btn-ghost btn-xs italic">I</button>
-        <button type="button" title="Strikethrough" onClick={() => wrapSelection("~")} className="btn btn-ghost btn-xs line-through">S</button>
+        {!hideFormatting && (
+          <>
+            <button type="button" title="Bold" onClick={() => wrapSelection("*")} className="btn btn-ghost btn-xs font-bold">B</button>
+            <button type="button" title="Italic" onClick={() => wrapSelection("_")} className="btn btn-ghost btn-xs italic">I</button>
+            <button type="button" title="Strikethrough" onClick={() => wrapSelection("~")} className="btn btn-ghost btn-xs line-through">S</button>
 
-        {/* Emoji */}
-        <button type="button" title="Emoji" onClick={() => { setShowEmoji((s) => !s); setShowVars(false); }} className="btn btn-ghost btn-xs">😊</button>
-        {showEmoji && (
-          <div className="absolute bottom-8 left-0 z-30 bg-base-100 border border-base-300 rounded shadow p-2 grid grid-cols-6 gap-1 w-56">
-            {EMOJIS.map((e) => (
-              <button key={e} type="button" className="hover:bg-base-200 rounded text-lg" onClick={() => { insertAtCursor(e); setShowEmoji(false); }}>{e}</button>
-            ))}
-          </div>
+            {/* Emoji */}
+            <button type="button" title="Emoji" onClick={() => { setShowEmoji((s) => !s); setShowVars(false); }} className="btn btn-ghost btn-xs">😊</button>
+            {showEmoji && (
+              <div className="absolute bottom-8 left-0 z-30 bg-base-100 border border-base-300 rounded shadow p-2 grid grid-cols-6 gap-1 w-56">
+                {EMOJIS.map((e) => (
+                  <button key={e} type="button" className="hover:bg-base-200 rounded text-lg" onClick={() => { insertAtCursor(e); setShowEmoji(false); }}>{e}</button>
+                ))}
+              </div>
+            )}
+          </>
         )}
 
         <div className="flex-1" />
