@@ -21,7 +21,14 @@ function nowLabel() {
 
 // A floating chat widget that tests the PUBLISHED flow via the real
 // conversation path (creates a real, logged conversation).
-export function TestPanel({ chatbotId }: { chatbotId: string }) {
+export function TestPanel({
+  chatbotId,
+  beforeSend,
+}: {
+  chatbotId: string;
+  // Called before each test message so the server draft matches the canvas.
+  beforeSend?: () => Promise<unknown>;
+}) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -43,6 +50,8 @@ export function TestPanel({ chatbotId }: { chatbotId: string }) {
     setLoading(true);
     setActiveOptions([]);
     try {
+      // Push any unsaved canvas changes first; the tester runs the saved draft.
+      if (beforeSend) await beforeSend();
       const res = await api.post(`/api/chatbots/${chatbotId}/workflow/test`, {
         message,
         testUserId: sid,
@@ -54,6 +63,7 @@ export function TestPanel({ chatbotId }: { chatbotId: string }) {
       const statusMessages: Record<string, string> = {
         chatbot_inactive: "⚠️ Publish and activate this chatbot first, then test.",
         no_published_version: "⚠️ Publish this chatbot first, then test.",
+        no_draft: "⚠️ Save the flow first, then test.",
         conversation_completed: "This test session already finished. Click ↺ to restart.",
         no_start_node: "⚠️ This flow has no Start node. Add one, then publish and test.",
         no_trigger_match: "⚠️ The Start trigger didn't match. Publish the latest version, then restart the test.",
