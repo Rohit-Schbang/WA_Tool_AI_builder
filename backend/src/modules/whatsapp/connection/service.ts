@@ -34,14 +34,15 @@ export function ToSafeConnection(c: Connection): SafeConnection {
 // The data a caller can send when saving a connection.
 // All optional so they can update just some fields.
 export interface ConnectionInput {
-    businessName?: string;
-    phoneNumber?: string;
-    phoneNumberId?: string;
-    wabaId?: string;
-    accessToken?: string;
-    appId?: string;
-    appSecret?: string;
-    verifyToken?: string;
+    businessName?: string | null;
+    phoneNumber?: string | null;
+    phoneNumberId?: string | null;
+    wabaId?: string | null;
+    accessToken?: string | null;
+    appId?: string | null;
+    appSecret?: string | null;
+    verifyToken?: string | null;
+    status?: "DISCONNECTED" | "CONNECTED" | "ERROR";
 }
 
 // Getting raw-connection for a chatbot (may be null if never configured).
