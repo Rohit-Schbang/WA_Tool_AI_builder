@@ -55,6 +55,40 @@ interface WorkflowVariable {
 
 const VARIABLE_TYPES = ["text", "number", "boolean"] as const;
 
+// Comparison operators for the If/Else (CONDITION) node. `value` is what's
+// persisted in config.operator; `label` is shown in the dropdown.
+const CONDITION_OPERATORS = [
+  { value: "equals", label: "Equals to (=)" },
+  { value: "not_equals", label: "Not equal to (≠)" },
+  { value: "greater_than", label: "Greater than (>)" },
+  { value: "greater_than_equal", label: "Greater than or equal (≥)" },
+  { value: "less_than", label: "Less than (<)" },
+  { value: "less_than_equal", label: "Less than or equal (≤)" },
+  { value: "starts_with", label: "Starts with" },
+  { value: "ends_with", label: "Ends with" },
+  { value: "contains", label: "Contains" },
+  { value: "is_empty", label: "Is empty" },
+  { value: "is_not_empty", label: "Is not empty" },
+] as const;
+
+// Operators that don't compare against a value (no "Value to compare" input).
+const VALUELESS_OPERATORS = ["is_empty", "is_not_empty"];
+
+// Which operators make sense for each variable type:
+//   number  -> equality + numeric comparisons (>, ≥, <, ≤)
+//   text    -> equality + string matching (starts/ends with, contains)
+//   boolean -> no operator picker; it's always "equals true/false"
+const OPERATORS_BY_TYPE: Record<"text" | "number" | "boolean", string[]> = {
+  number: ["equals", "not_equals", "greater_than", "greater_than_equal", "less_than", "less_than_equal", "is_empty", "is_not_empty"],
+  text: ["equals", "not_equals", "starts_with", "ends_with", "contains", "is_empty", "is_not_empty"],
+  boolean: ["equals"],
+};
+
+function operatorsForType(type: "text" | "number" | "boolean") {
+  const allowed = OPERATORS_BY_TYPE[type];
+  return CONDITION_OPERATORS.filter((op) => allowed.includes(op.value));
+}
+
 // #1 — a reusable global API configuration.
 interface ApiEndpoint {
   id: string;
@@ -448,10 +482,8 @@ function BuilderInner() {
       await api.put(`/api/chatbots/${chatbotId}/workflow/draft`, { definition });
       // Keep the auto-save baseline in sync so it doesn't re-push immediately.
       autoSave.primeBaseline(definition);
-      // This is now the published/saved baseline -> Publish disables until the
-      // next edit.
-      publishedBaselineRef.current = JSON.stringify(definition);
-      setDirtySincePublish(false);
+      // Note: saving a draft does NOT count as publishing, so the
+      // "unpublished changes" state is left as-is (only Publish clears it).
       // Persisted to the server -> local backup is redundant; clearing it
       // prevents a stale "restore unsaved changes" prompt on the next load.
       clearLocalDraft(chatbotId);
@@ -1101,18 +1133,17 @@ function BuilderInner() {
             )}
           </div>
 
-          <button
-            onClick={handleToggleActive}
-            disabled={activating}
-            className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold transition active:scale-95 shadow-2xs disabled:opacity-60 ${
+          {/* Live / Inactive status (the toggle now lives in the primary button) */}
+          <span
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-semibold ${
               isActive
-                ? "bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100"
-                : "bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100"
+                ? "bg-emerald-50 border-emerald-200 text-emerald-700"
+                : "bg-slate-50 border-slate-200 text-slate-500"
             }`}
           >
-            <span className={`w-1.5 h-1.5 rounded-full ${isActive ? "bg-amber-500" : "bg-emerald-500"} ${!isActive ? "animate-pulse" : ""}`} />
-            <span>{activating ? "..." : isActive ? "Deactivate" : "Activate"}</span>
-          </button>
+            <span className={`w-1.5 h-1.5 rounded-full ${isActive ? "bg-emerald-500 animate-pulse" : "bg-slate-400"}`} />
+            {isActive ? "Live" : "Inactive"}
+          </span>
 
           {/* #11 — auto-save status */}
           <span
@@ -1147,15 +1178,44 @@ function BuilderInner() {
             <span>{saving ? "Saving..." : "Save Draft"}</span>
           </button>
 
-          <button
-            onClick={handlePublish}
-            disabled={publishing || !dirtySincePublish}
-            title={!dirtySincePublish ? "No changes to publish" : undefined}
-            className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg bg-brand-600 hover:bg-brand-700 text-xs font-semibold text-white transition active:scale-95 shadow-sm shadow-brand-600/30 disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:bg-brand-600 disabled:active:scale-100"
-          >
-            <i className="ph-bold ph-paper-plane-tilt text-xs" />
-            <span>{publishing ? "Publishing..." : "Publish"}</span>
-          </button>
+          {/* Single primary action:
+                inactive              -> "Publish & Activate"
+                active + new changes  -> "Publish Changes" (stays active)
+                active + no changes   -> "Deactivate" */}
+          {(() => {
+            const willDeactivate = isActive && !dirtySincePublish;
+            const busy = publishing || activating;
+            const label = publishing
+              ? "Publishing..."
+              : activating
+              ? "Deactivating..."
+              : willDeactivate
+              ? "Deactivate"
+              : isActive
+              ? "Publish Changes"
+              : "Publish & Activate";
+            return (
+              <button
+                onClick={willDeactivate ? handleToggleActive : handlePublish}
+                disabled={busy}
+                title={
+                  willDeactivate
+                    ? "Stop this bot from replying to users"
+                    : isActive
+                    ? "Publish your latest changes to the live bot"
+                    : "Publish this flow and make the bot live"
+                }
+                className={`flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition active:scale-95 shadow-sm disabled:opacity-60 disabled:cursor-not-allowed disabled:active:scale-100 ${
+                  willDeactivate
+                    ? "bg-amber-50 border border-amber-200 text-amber-700 hover:bg-amber-100"
+                    : "bg-brand-600 hover:bg-brand-700 text-white shadow-brand-600/30"
+                }`}
+              >
+                <i className={`ph-bold ${willDeactivate ? "ph-pause-circle" : "ph-paper-plane-tilt"} text-xs`} />
+                <span>{label}</span>
+              </button>
+            );
+          })()}
         </div>
       </header>
 
@@ -1820,30 +1880,102 @@ function BuilderInner() {
               </div>
             )}
 
-            {selectedNode.data.nodeType === "CONDITION" && (
-              <>
-                <label className="form-control">
-                  <span className="label-text">Variable to check</span>
-                  <VariableSelect
-                    value={selectedNode.data.config.field ?? ""}
-                    onChange={(v) => updateConfig("field", v)}
-                    variables={variables}
-                    onCreateVariable={ensureVariable}
-                    placeholder="Select a variable"
-                  />
-                </label>
-                <label className="form-control">
-                  <span className="label-text">Equals value</span>
-                  <VariableTextInput
-                    value={selectedNode.data.config.value ?? ""}
-                    onChange={(v) => updateConfig("value", v)}
-                    variables={variables}
-                    onCreateVariable={ensureVariable}
-                    singleLine
-                  />
-                </label>
-              </>
-            )}
+            {selectedNode.data.nodeType === "CONDITION" && (() => {
+              const cfg = selectedNode.data.config;
+              // Type of the selected variable (undeclared/legacy -> treat as text).
+              const fieldType: "text" | "number" | "boolean" =
+                variables.find((v) => v.name === cfg.field)?.type ?? "text";
+              const allowedOps = operatorsForType(fieldType);
+              // If the stored operator doesn't fit this type, show the first valid one.
+              const currentOp = allowedOps.some((op) => op.value === cfg.operator)
+                ? cfg.operator
+                : allowedOps[0].value;
+
+              // When the variable changes, keep operator/value valid for its type.
+              function handleFieldChange(v: string) {
+                updateConfig("field", v);
+                const t = variables.find((x) => x.name === v)?.type ?? "text";
+                const ops = OPERATORS_BY_TYPE[t];
+                if (!ops.includes(cfg.operator ?? "equals")) updateConfig("operator", ops[0]);
+                if (t === "boolean") {
+                  updateConfig("operator", "equals");
+                  if (cfg.value !== "true" && cfg.value !== "false") updateConfig("value", "true");
+                }
+              }
+
+              return (
+                <>
+                  <label className="form-control">
+                    <span className="label-text">Variable to check</span>
+                    <VariableSelect
+                      value={cfg.field ?? ""}
+                      onChange={handleFieldChange}
+                      variables={variables}
+                      onCreateVariable={ensureVariable}
+                      placeholder="Select a variable"
+                    />
+                  </label>
+
+                  {fieldType === "boolean" ? (
+                    // Boolean: no operator picker — just "is true" / "is false".
+                    <div className="space-y-1.5">
+                      <span className="block font-semibold text-slate-700 text-xs">Is</span>
+                      <div className="relative">
+                        <select
+                          className="w-full appearance-none px-3 py-2 text-xs rounded-lg border border-slate-300 bg-white text-slate-700 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500 font-medium cursor-pointer pr-8"
+                          value={cfg.value === "false" ? "false" : "true"}
+                          onChange={(e) => {
+                            updateConfig("operator", "equals");
+                            updateConfig("value", e.target.value);
+                          }}
+                        >
+                          <option value="true">True</option>
+                          <option value="false">False</option>
+                        </select>
+                        <i className="ph-bold ph-caret-down absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 text-[10px] pointer-events-none" />
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="space-y-1.5">
+                        <span className="block font-semibold text-slate-700 text-xs">Condition</span>
+                        <div className="relative">
+                          <select
+                            className="w-full appearance-none px-3 py-2 text-xs rounded-lg border border-slate-300 bg-white text-slate-700 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500 font-medium cursor-pointer pr-8"
+                            value={currentOp}
+                            onChange={(e) => updateConfig("operator", e.target.value)}
+                          >
+                            {allowedOps.map((op) => (
+                              <option key={op.value} value={op.value}>{op.label}</option>
+                            ))}
+                          </select>
+                          <i className="ph-bold ph-caret-down absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 text-[10px] pointer-events-none" />
+                        </div>
+                      </div>
+                      {/* Is empty / Is not empty don't need a value */}
+                      {!VALUELESS_OPERATORS.includes(currentOp) && (
+                        <label className="form-control">
+                          <span className="label-text">Value to compare</span>
+                          <VariableTextInput
+                            value={cfg.value ?? ""}
+                            onChange={(v) => updateConfig("value", v)}
+                            variables={variables}
+                            onCreateVariable={ensureVariable}
+                            singleLine
+                            placeholder={fieldType === "number" ? "e.g. 18" : "e.g. deeraj"}
+                          />
+                        </label>
+                      )}
+                    </>
+                  )}
+
+                  <p className="text-xs text-base-content/50">
+                    If the condition is true the flow follows the <strong className="text-slate-600">true</strong> branch,
+                    otherwise the <strong className="text-slate-600">else</strong> branch.
+                  </p>
+                </>
+              );
+            })()}
 
             {selectedNode.data.nodeType === "AI_RESPONSE" && (
               <>
@@ -2498,7 +2630,7 @@ function BuilderInner() {
       </div>
       {/* end workspace row */}
 
-      <TestPanel chatbotId={chatbotId} />
+      <TestPanel chatbotId={chatbotId} beforeSend={autoSave.syncNow} />
 
       {/* #2 — View Variables modal (overlay, does not shift the canvas) */}
       {showVarList && (

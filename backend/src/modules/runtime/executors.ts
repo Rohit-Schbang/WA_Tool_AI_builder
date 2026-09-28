@@ -141,13 +141,66 @@ const askInput: NodeExecutor = async (node, ctx) => {
   return { action: "wait" };
 };
 
+// Evaluate an If/Else condition using the operator chosen in the builder.
+// `expected` may reference variables ({{var}}), so it's interpolated first.
+// Numeric operators coerce both sides to numbers; string operators compare
+// case-insensitively as strings.
+function evaluateCondition(
+  operator: string,
+  actual: any,
+  expected: any
+): boolean {
+  const aStr = actual == null ? "" : String(actual);
+  const eStr = expected == null ? "" : String(expected);
+  const aStrLc = aStr.trim().toLowerCase();
+  const eStrLc = eStr.trim().toLowerCase();
+  const aNum = Number(actual);
+  const eNum = Number(expected);
+  const bothNumeric = !Number.isNaN(aNum) && !Number.isNaN(eNum) && aStr.trim() !== "" && eStr.trim() !== "";
+
+  // "Empty" = missing, blank/whitespace-only, or a non-numeric NaN value.
+  const isEmpty =
+    actual == null ||
+    aStr.trim() === "" ||
+    (typeof actual === "number" && Number.isNaN(actual));
+
+  switch (operator) {
+    case "is_empty":
+      return isEmpty;
+    case "is_not_empty":
+      return !isEmpty;
+    case "not_equals":
+      return aStrLc !== eStrLc;
+    case "greater_than":
+      return bothNumeric ? aNum > eNum : aStr > eStr;
+    case "greater_than_equal":
+      return bothNumeric ? aNum >= eNum : aStr >= eStr;
+    case "less_than":
+      return bothNumeric ? aNum < eNum : aStr < eStr;
+    case "less_than_equal":
+      return bothNumeric ? aNum <= eNum : aStr <= eStr;
+    case "starts_with":
+      return aStrLc.startsWith(eStrLc);
+    case "ends_with":
+      return aStrLc.endsWith(eStrLc);
+    case "contains":
+      return aStrLc.includes(eStrLc);
+    case "equals":
+    default:
+      return aStrLc === eStrLc;
+  }
+}
+
 const condition: NodeExecutor = async (node, ctx) => {
-  const field = node.config.field;
-  const expected = node.config.value;
+  // Normalize the field name: strip any {{ }} braces and surrounding
+  // whitespace so it matches the plain variable key used elsewhere.
+  const field = String(node.config.field ?? "").replace(/[{}]/g, "").trim();
+  const operator = node.config.operator ?? "equals";
+  // Allow the compared value to reference variables, e.g. {{other_var}}.
+  const expected = interpolate(String(node.config.value ?? ""), ctx.variables);
   const actual = ctx.variables[field];
 
-  // Compare as strings for a simple, predictable equality check.
-  const matches = String(actual) === String(expected);
+  const matches = evaluateCondition(operator, actual, expected);
   return { action: "next", handle: matches ? "true" : "else" };
 };
 

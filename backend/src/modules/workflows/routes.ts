@@ -110,8 +110,8 @@ workflowsRouter.post("/ping", async (req: Request, res: Response) => {
 });
 
 // POST /api/chatbots/:chatbotId/workflow/test
-// Web-based test: runs the REAL conversation path (published + active version),
-// creates a real logged conversation, and returns the bot's replies.
+// Web-based test: runs the REAL conversation path against the latest saved
+// draft, creates a real logged conversation, and returns the bot's replies.
 workflowsRouter.post("/test", async (req: Request, res: Response) => {
   const chatbotId = req.params.chatbotId;
 
@@ -128,6 +128,8 @@ workflowsRouter.post("/test", async (req: Request, res: Response) => {
 
   const result = await handleInboundMessage(chatbotId, waUserId, message ?? "", adapter, {
     bypassTrigger: true,
+    // Test what's on the canvas (latest saved draft), not the last publish.
+    useDraft: true,
   });
 
   return res.json({

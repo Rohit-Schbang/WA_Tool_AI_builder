@@ -31,6 +31,24 @@ const STYLE: Record<string, { icon: string; accent: string; ring: string; chip: 
     END: { icon: "⏹", accent: "bg-gray-500", ring: "border-gray-200", chip: "text-gray-600" },
 };
 
+// Short symbol/word shown in the If/Else node card for each operator.
+const OPERATOR_SYMBOL: Record<string, string> = {
+    equals: "=",
+    not_equals: "≠",
+    greater_than: ">",
+    greater_than_equal: "≥",
+    less_than: "<",
+    less_than_equal: "≤",
+    starts_with: "starts with",
+    ends_with: "ends with",
+    contains: "contains",
+    is_empty: "is empty",
+    is_not_empty: "is not empty",
+};
+
+// Operators that have no comparison value (preview omits the value).
+const VALUELESS_OPS = ["is_empty", "is_not_empty"];
+
 const handleClass = "!w-3 !h-3 !bg-white !border-2 !border-gray-400 hover:!border-primary";
 
 export function WorkFlowNode({ id, data, selected }: NodeProps) {
@@ -45,7 +63,15 @@ export function WorkFlowNode({ id, data, selected }: NodeProps) {
     let preview = "";
     if (nodeType === "SEND_MESSAGE") preview = config.text || "No message";
     else if (nodeType === "ASK_INPUT") preview = config.text || "(no question)";
-    else if (nodeType === "CONDITION") preview = config.field ? `${config.field} = ${config.value ?? ""}` : "(no condition)";
+    else if (nodeType === "CONDITION") {
+        const op = config.operator ?? "equals";
+        const sym = OPERATOR_SYMBOL[op] ?? "=";
+        preview = config.field
+            ? VALUELESS_OPS.includes(op)
+                ? `${config.field} ${sym}`
+                : `${config.field} ${sym} ${config.value ?? ""}`
+            : "(no condition)";
+    }
     else if (nodeType === "WAIT") preview = config.seconds ? `${config.seconds}s delay` : "(no delay)";
     else if (nodeType === "SET_VARIABLE") preview = config.variable ? `${config.variable} = ${config.value ?? ""}` : "(no variable)";
     else if (nodeType === "BUTTONS") preview = config.text || "(no prompt)";

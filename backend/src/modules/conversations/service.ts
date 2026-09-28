@@ -53,22 +53,34 @@ export async function handleInboundMessage(
     // always starts the flow, regardless of the START node's trigger keywords.
     // The live WhatsApp webhook path omits this, so trigger matching still
     // applies there exactly as before.
-    opts: { bypassTrigger?: boolean } = {}
+    // The web tester also passes { useDraft: true } so it runs the latest saved
+    // draft (what the user sees on the canvas) instead of the last published
+    // version, and works even when the bot isn't active yet.
+    opts: { bypassTrigger?: boolean; useDraft?: boolean } = {}
 ): Promise<{ status: string }> {
 
 
-    // 1.  Load the chatbot & its active published version.
+    // 1.  Load the chatbot & the workflow version to run.
     const chatbot = await prisma.chatbot.findUnique({ where: { id: chatbotId } })
+    if (!chatbot) return { status: "chatbot_inactive" }
 
-    if (!chatbot || !chatbot.isActive || !chatbot.activeVersionId) {
-        return { status: "chatbot_inactive" }
+    let version;
+    if (opts.useDraft) {
+        // Draft is stored as version 0 (see workflows/service.ts).
+        version = await prisma.workflowVersion.findUnique({
+            where: { chatbotId_version: { chatbotId, version: 0 } }
+        })
+        if (!version) return { status: "no_draft" }
+    } else {
+        // Live path: only an active chatbot with a published version replies.
+        if (!chatbot.isActive || !chatbot.activeVersionId) {
+            return { status: "chatbot_inactive" }
+        }
+        version = await prisma.workflowVersion.findUnique({
+            where: { id: chatbot.activeVersionId }
+        })
+        if (!version) return { status: "no_published_version" }
     }
-
-    const version = await prisma.workflowVersion.findUnique({
-        where: { id: chatbot.activeVersionId }
-    })
-
-    if (!version) return { status: "no_published_version" }
 
     const definition = version.definition as unknown as WorkflowDefinition
 
