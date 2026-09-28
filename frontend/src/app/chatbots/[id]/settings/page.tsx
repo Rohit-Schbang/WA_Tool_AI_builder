@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { Sidebar } from "@/app/components/Sidebar";
+import { EmbeddedSignup } from "./EmbeddedSignup";
 
 // Shape of the safe connection returned from the backend (no secret values).
 interface SafeConnection {
@@ -171,6 +172,21 @@ export default function SettingsPage() {
               <span className="loading loading-spinner loading-lg text-teal-600"></span>
             </div>
           ) : (
+            <div className="flex flex-col gap-6">
+            {/* One-click Meta Embedded Signup (auto-provisions credentials) */}
+            <EmbeddedSignup chatbotId={chatbotId} connected={connected} onConnected={loadConnection} />
+
+            {/* Manual setup — fallback / advanced. */}
+            <div>
+              <div className="flex items-center gap-2 mb-3">
+                <span className="h-px flex-1 bg-slate-200" />
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                  Or configure manually
+                </span>
+                <span className="h-px flex-1 bg-slate-200" />
+              </div>
+            </div>
+
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
               {/* ---------------- Main configuration form (8 cols) ---------------- */}
               <form onSubmit={handleSave} className="lg:col-span-8 flex flex-col gap-6">
@@ -441,6 +457,7 @@ export default function SettingsPage() {
                   </a>
                 </div>
               </div>
+            </div>
             </div>
           )}
         </main>

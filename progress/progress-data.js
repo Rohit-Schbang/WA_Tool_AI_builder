@@ -172,10 +172,20 @@ const PLAN = [
     ],
   },
   {
-    name: "V2.CR Batch D — Infrastructure (next)",
+    name: "V2.CR Batch D — Infrastructure",
     days: "Sep 24",
     tasks: [
-      { title: "#11 Auto-save (localStorage immediate + DB sync every 30s, change-detect + retry)", day: "CR", date: "", status: "todo" },
+      { title: "#11 Auto-save (localStorage immediate + DB sync every 30s, change-detect + retry)", day: "CR", date: "Sep 24, 2026", status: "done" },
+    ],
+  },
+  {
+    name: "V2.6 — WhatsApp Embedded Signup (one-click Meta connect)",
+    days: "Sep 24",
+    tasks: [
+      { title: "Backend: Meta config vars + embedded-signup service (code→token, WABA/phone lookup, subscribe, register, persist)  · code done", day: "Day X", date: "Sep 24, 2026", status: "done" },
+      { title: "Backend routes: GET /connection/meta-config + POST /connection/embedded-signup", day: "Day X", date: "Sep 24, 2026", status: "done" },
+      { title: "Frontend: FB JS SDK + Continue-with-Facebook + WA_EMBEDDED_SIGNUP listener + 4-step stepper on settings", day: "Day X", date: "Sep 24, 2026", status: "done" },
+      { title: "Awaiting Meta creds (App ID/Secret/Config ID) + App Review/Business Verification to go live", day: "Day X", date: "", status: "todo" },
     ],
   },
   {

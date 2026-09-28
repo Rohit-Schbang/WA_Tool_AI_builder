@@ -22,6 +22,18 @@ const envSchema = z.object({
   JWT_EXPIRES_IN: z.string().default("7d"),
   FRONTEND_ORIGIN: z.string().default("http://localhost:3001"),
   GEMINI_API_KEY: z.string().optional(),
+
+  // --- WhatsApp Embedded Signup (Meta) ---
+  // All optional so the app boots without them; the embedded-signup flow is
+  // simply disabled until the manager provides these from the Meta App
+  // dashboard. APP_ID + CONFIG_ID are safe to expose to the frontend (for the
+  // FB JS SDK); APP_SECRET is backend-only.
+  META_APP_ID: z.string().optional(),
+  META_APP_SECRET: z.string().optional(),
+  META_CONFIG_ID: z.string().optional(),          // Facebook Login for Business Configuration ID
+  META_GRAPH_VERSION: z.string().default("v22.0"),
+  META_REDIRECT_URI: z.string().optional(),        // must match a registered OAuth redirect URI
+  WHATSAPP_REGISTER_PIN: z.string().default("000000"), // 6-digit PIN used when registering the phone number
 });
 
 const parsed = envSchema.safeParse(process.env);

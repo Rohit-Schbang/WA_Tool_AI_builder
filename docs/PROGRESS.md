@@ -502,3 +502,88 @@ When a task moves from `todo`/`active` to `done` in
 describing **what was built, where it lives, and anything non-obvious about
 how it works or why it was done that way.** Bug fixes and gotchas worth
 remembering for later go in §8. Keep the "Last updated" date at the top current.
+
+---
+
+## WhatsApp Embedded Signup — one-click Meta connect (Sep 24, 2026)
+
+The official Meta self-onboarding flow (how BSPs like Gupshup/Wati onboard):
+the end user clicks "Continue with Facebook", logs into Meta, picks/creates
+their WhatsApp Business Account (WABA) + phone number inside Meta's embedded
+popup, and our backend auto-fetches the API credentials — no manual token
+copying.
+
+**Config-driven & dormant until Meta creds are added.** With no credentials
+the UI shows a "not enabled — use manual" state and the endpoint refuses
+cleanly. Adding the Meta env vars + restarting the backend activates it with
+no code changes.
+
+### Files & responsibilities
+
+- **`backend/src/infra/config.ts`** — added (all optional):
+  `META_APP_ID`, `META_APP_SECRET`, `META_CONFIG_ID`,
+  `META_GRAPH_VERSION` (default `v22.0`), `META_REDIRECT_URI`,
+  `WHATSAPP_REGISTER_PIN` (default `000000`).
+
+- **`backend/src/modules/whatsapp/connection/embeddedSignup.ts`** — the core
+  service. Functions:
+  - `isEmbeddedSignupConfigured()` — true only when APP_ID + APP_SECRET +
+    CONFIG_ID are all set; used to gate the feature.
+  - `exchangeCodeForToken(code)` — POST `/oauth/access_token` (client_id +
+    client_secret + code [+ redirect_uri]) → returns the BISU access token.
+  - `getWabaDetails(wabaId, token)` — GET `/{waba}?fields=id,name` (cosmetic).
+  - `getPhoneDetails(phoneNumberId, token)` — GET
+    `/{phoneId}?fields=display_phone_number,verified_name` (cosmetic).
+  - `subscribeApp(wabaId, token)` — POST `/{waba}/subscribed_apps` (must run
+    before registration so webhooks land).
+  - `registerPhoneNumber(phoneNumberId, token)` — POST `/{phoneId}/register`
+    with the PIN; ignores "already registered" so reconnect doesn't hard-fail.
+  - `completeEmbeddedSignup(chatbotId, {code, wabaId, phoneNumberId})` —
+    orchestrates all of the above, then `upsertConnection(...)` with
+    `status: CONNECTED`, storing accessToken (BISU), wabaId, phoneNumberId,
+    phoneNumber, businessName, appId, appSecret.
+  - `EmbeddedSignupError` — typed error so routes return a clean 502 message.
+
+- **`backend/src/modules/whatsapp/connection/service.ts`** — `ConnectionInput`
+  extended with `status` + nullable fields (so the signup service can write
+  them).
+
+- **`backend/src/modules/whatsapp/connection/routes.ts`** — two new routes
+  (owner-scoped via `getChatbot`):
+  - `GET /api/chatbots/:id/connection/meta-config` — returns
+    `{ enabled, appId, configId, graphVersion }` for the frontend FB SDK init.
+    **Never returns the app secret.**
+  - `POST /api/chatbots/:id/connection/embedded-signup` — body
+    `{ code, wabaId, phoneNumberId }` (zod-validated) → calls
+    `completeEmbeddedSignup`; 502 with a friendly message on failure.
+
+- **`frontend/src/app/chatbots/[id]/settings/EmbeddedSignup.tsx`** — the UI
+  component:
+  - Fetches `meta-config`; if `enabled`, loads the Facebook JS SDK
+    (`connect.facebook.net/en_US/sdk.js`) and `FB.init` with the app id.
+  - "Continue with Facebook" calls `FB.login` with `config_id`,
+    `response_type: "code"`, `override_default_response_type: true`,
+    `extras.sessionInfoVersion: "3"`.
+  - A `window` message listener catches Meta's `WA_EMBEDDED_SIGNUP` events:
+    `FINISH` (captures `waba_id` + `phone_number_id`), `CANCEL`, `ERROR`.
+  - On the `FB.login` callback it grabs `authResponse.code` and POSTs
+    code + waba_id + phone_number_id to the backend immediately (~60s expiry).
+  - 4-step stepper: Log in → Business & WABA → Verify number → Connected.
+    Shows a "not enabled yet" card when the server has no creds.
+
+- **`frontend/src/app/chatbots/[id]/settings/page.tsx`** — renders
+  `<EmbeddedSignup>` at the top; the existing manual credential form is kept
+  below under an "Or configure manually" divider (fallback / advanced).
+
+### To go live (Meta-side, not code)
+1. Manager provides `META_APP_ID`, `META_APP_SECRET`, `META_CONFIG_ID`
+   (+ `META_REDIRECT_URI`, `WHATSAPP_REGISTER_PIN`) in backend `.env`; restart.
+2. Meta App needs **App Review** for `whatsapp_business_management` +
+   `whatsapp_business_messaging` (Advanced Access) and **Business
+   Verification**; app in **Live mode**. Until then only admin/test users can
+   complete the flow (fine for dev testing).
+3. Deploy domain must be HTTPS and registered in the app's Allowed Domains /
+   Valid OAuth Redirect URIs.
+
+Verified with no creds: `meta-config` → `enabled:false`; `embedded-signup`
+→ clean 502 "not configured"; both apps compile (tsc clean).
