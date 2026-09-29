@@ -47,7 +47,7 @@ export async function generateAiReply(prompt: string): Promise<string> {
 export async function generateJson(prompt: string): Promise<any> {
     if (!config.GEMINI_API_KEY) throw new Error("AI API Key is not configured");
 
-    const model = "gemini-3.5-flash";
+    const model = "gemini-3.8-flash";
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 

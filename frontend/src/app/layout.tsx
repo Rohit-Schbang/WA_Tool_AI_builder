@@ -11,6 +11,12 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" data-theme="wa" suppressHydrationWarning>
       <head>
+        {/* Ask the Dark Reader extension to leave this app alone. Without this,
+            Dark Reader injects data-darkreader-* attributes and inline styles
+            into the DOM (e.g. React Flow's <Background/> SVG) after the server
+            render but before hydration, causing a hydration-mismatch error and
+            repainting our light UI (black input text on dark backgrounds). */}
+        <meta name="darkreader-lock" />
         {/* Fonts used by the PingFlow "Sky & Peach" auth pages (login/register). */}
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />

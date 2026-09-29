@@ -10,7 +10,7 @@ import { Prisma } from "@prisma/client";
 import { getDraft, publishDraft, saveDraft } from "./service.js";
 import { handleInboundMessage } from "../conversations/service.js";
 import { ConsoleAdapter } from "../messaging/adapters.js";
-import { generateJourney, planOnly } from "./generator.js";
+import { generateJourney, planOnly, makeEditContext } from "./generator.js";
 
 export const workflowsRouter = Router({ mergeParams: true });
 
@@ -125,6 +125,16 @@ const generateSchema = z.object({
     nodeType: z.string().optional(),
     detail: z.string().optional(),
   })).optional(),
+  // EDIT mode: when both are present, the journey is REGENERATED from the
+  // existing flow + this instruction (create-new-from-original, not a patch).
+  editInstruction: z.string().max(4000).optional(),
+  currentDefinition: z.object({
+    variables: z.array(z.any()).optional(),
+    nodes: z.array(z.any()),
+    edges: z.array(z.any()),
+  }).passthrough().optional(),
+  // Optional: pin where the edit applies (a node id) so the AI doesn't guess.
+  anchorNodeId: z.string().optional(),
 });
 
 const aiErrorMessage = (err: any) =>
@@ -143,13 +153,15 @@ workflowsRouter.post("/generate-plan", async (req: Request, res: Response) => {
   const parsed = generateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "Invalid input", details: parsed.error.flatten() });
 
-  const { description, drawioXml } = parsed.data;
-  if (!description.trim() && !drawioXml?.trim()) {
-    return res.status(400).json({ error: "Provide a description or a draw.io diagram." });
+  const { description, drawioXml, editInstruction, currentDefinition, anchorNodeId } = parsed.data;
+  const isEdit = !!(editInstruction?.trim() && currentDefinition);
+  if (!description.trim() && !drawioXml?.trim() && !isEdit) {
+    return res.status(400).json({ error: "Provide a description, a draw.io diagram, or an edit instruction." });
   }
 
   try {
-    const plan = await planOnly(description, drawioXml);
+    const editCtx = isEdit ? makeEditContext(currentDefinition, editInstruction!, anchorNodeId) : undefined;
+    const plan = await planOnly(description, drawioXml, editCtx);
     return res.json({ plan });
   } catch (err: any) {
     console.error("Journey plan error:", err?.message ?? err);
@@ -166,13 +178,15 @@ workflowsRouter.post("/generate", async (req: Request, res: Response) => {
   const parsed = generateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "Invalid input", details: parsed.error.flatten() });
 
-  const { description, drawioXml, plan } = parsed.data;
-  if (!description.trim() && !drawioXml?.trim() && !(plan && plan.length)) {
-    return res.status(400).json({ error: "Provide a description or a draw.io diagram." });
+  const { description, drawioXml, plan, editInstruction, currentDefinition, anchorNodeId } = parsed.data;
+  const isEdit = !!(editInstruction?.trim() && currentDefinition);
+  if (!description.trim() && !drawioXml?.trim() && !(plan && plan.length) && !isEdit) {
+    return res.status(400).json({ error: "Provide a description, a draw.io diagram, or an edit instruction." });
   }
 
   try {
-    const result = await generateJourney(description, drawioXml, plan as any);
+    const editCtx = isEdit ? makeEditContext(currentDefinition, editInstruction!, anchorNodeId) : undefined;
+    const result = await generateJourney(description, drawioXml, plan as any, editCtx);
     return res.json({
       ok: result.ok,
       definition: result.definition ?? null,

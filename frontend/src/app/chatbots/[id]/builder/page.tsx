@@ -2653,11 +2653,12 @@ function BuilderInner() {
 
       <TestPanel chatbotId={chatbotId} beforeSend={autoSave.syncNow} />
 
-      {/* AI journey generator — describe a flow (or attach draw.io) → canvas */}
+      {/* AI journey generator — create new, or edit (regenerate) the canvas */}
       <AiJourneyPanel
         chatbotId={chatbotId}
         onApply={applyGeneratedDefinition}
         hasExistingNodes={nodes.filter((n) => n.data.nodeType !== "START").length > 0}
+        getCurrentDefinition={buildDefinition}
       />
 
       {/* #2 — View Variables modal (overlay, does not shift the canvas) */}
