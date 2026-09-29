@@ -23,6 +23,7 @@ import { TestPanel } from "./testPanel";
 import { VariableTextInput, VariableSelect, NoReplyFallback } from "./VariableInputs";
 import { layoutGraph } from "./autoLayout";
 import { useAutoSave, readLocalDraft, clearLocalDraft } from "./useAutoSave";
+import { AiJourneyPanel } from "./AiJourneyPanel";
 
 // Map React Flow node type name -> our custom component.
 const nodeTypes = { workflow: WorkFlowNode };
@@ -472,6 +473,26 @@ function BuilderInner() {
     const maxSeq = (def.nodes ?? []).reduce((m: number, n: any) => Math.max(m, n.seq ?? 0), 0);
     setSeqCounter(maxSeq + 1);
   }, [deleteNode, setNodes, setEdges]);
+
+  // ---------------------- AI JOURNEY GENERATOR ----------------------
+  // Apply an AI-generated definition to the canvas: hydrate it (reusing the
+  // normal load path), auto-layout into a clean tree, and let autosave pick up
+  // the change. The generated flow is a reviewable draft, not auto-published.
+  const applyGeneratedDefinition = useCallback((def: any) => {
+    hydrateDefinition(def);
+    setSelectedId(null);
+    // Once the generated nodes/edges are in state, lay them out into a clean
+    // tree and fit the view. Read from the def directly so we don't depend on
+    // the async state update having flushed yet.
+    setTimeout(() => {
+      setNodes((curNodes) => {
+        const laid = layoutGraph(curNodes, def.edges ?? [], "TB");
+        setTimeout(() => rfRef.current?.fitView({ duration: 600, padding: 0.2 }), 30);
+        return laid;
+      });
+      setLayoutDir("TB");
+    }, 80);
+  }, [hydrateDefinition, setNodes]);
 
   // ---------------------- SAVE DRAFT ----------------------
   async function handleSave() {
@@ -2631,6 +2652,13 @@ function BuilderInner() {
       {/* end workspace row */}
 
       <TestPanel chatbotId={chatbotId} beforeSend={autoSave.syncNow} />
+
+      {/* AI journey generator — describe a flow (or attach draw.io) → canvas */}
+      <AiJourneyPanel
+        chatbotId={chatbotId}
+        onApply={applyGeneratedDefinition}
+        hasExistingNodes={nodes.filter((n) => n.data.nodeType !== "START").length > 0}
+      />
 
       {/* #2 — View Variables modal (overlay, does not shift the canvas) */}
       {showVarList && (
