@@ -10,6 +10,7 @@ import { Prisma } from "@prisma/client";
 import { getDraft, publishDraft, saveDraft } from "./service.js";
 import { handleInboundMessage } from "../conversations/service.js";
 import { ConsoleAdapter } from "../messaging/adapters.js";
+import { generateJourney, planOnly } from "./generator.js";
 
 export const workflowsRouter = Router({ mergeParams: true });
 
@@ -110,6 +111,80 @@ workflowsRouter.post("/ping", async (req: Request, res: Response) => {
 });
 
 // POST /api/chatbots/:chatbotId/workflow/test
+// POST /api/chatbots/:chatbotId/workflow/generate
+// AI Journey Generator: turns a description (+ optional draw.io XML) into a
+// workflow definition the frontend can drop onto the canvas. Does NOT save it.
+const generateSchema = z.object({
+  description: z.string().max(8000).optional().default(""),
+  drawioXml: z.string().max(200000).optional(),
+  // When present, this is the user-APPROVED plan — build straight from it
+  // (skip the planning step). Omit it to just get a plan back for review.
+  plan: z.array(z.object({
+    step: z.number().optional(),
+    title: z.string().optional(),
+    nodeType: z.string().optional(),
+    detail: z.string().optional(),
+  })).optional(),
+});
+
+const aiErrorMessage = (err: any) =>
+  /API Key/i.test(String(err?.message))
+    ? "AI is not configured on the server (missing Gemini key)."
+    : /RESOURCE_EXHAUSTED|prepayment|402/i.test(String(err?.message))
+      ? "The AI account is out of credits. Please top up the Gemini billing."
+      : "Failed to generate. Please try again or rephrase.";
+
+// STEP 1 — PLAN ONLY. Returns the ordered stages for the user to review;
+// does NOT build or touch the canvas.
+workflowsRouter.post("/generate-plan", async (req: Request, res: Response) => {
+  const bot = await getChatbot(req.userId!, req.params.chatbotId);
+  if (!bot) return res.status(404).json({ error: "Chatbot not found" });
+
+  const parsed = generateSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "Invalid input", details: parsed.error.flatten() });
+
+  const { description, drawioXml } = parsed.data;
+  if (!description.trim() && !drawioXml?.trim()) {
+    return res.status(400).json({ error: "Provide a description or a draw.io diagram." });
+  }
+
+  try {
+    const plan = await planOnly(description, drawioXml);
+    return res.json({ plan });
+  } catch (err: any) {
+    console.error("Journey plan error:", err?.message ?? err);
+    return res.status(502).json({ error: aiErrorMessage(err) });
+  }
+});
+
+// STEP 2 — BUILD. Uses the approved plan (if provided) to build the workflow.
+workflowsRouter.post("/generate", async (req: Request, res: Response) => {
+  const chatbotId = req.params.chatbotId;
+  const bot = await getChatbot(req.userId!, chatbotId);
+  if (!bot) return res.status(404).json({ error: "Chatbot not found" });
+
+  const parsed = generateSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "Invalid input", details: parsed.error.flatten() });
+
+  const { description, drawioXml, plan } = parsed.data;
+  if (!description.trim() && !drawioXml?.trim() && !(plan && plan.length)) {
+    return res.status(400).json({ error: "Provide a description or a draw.io diagram." });
+  }
+
+  try {
+    const result = await generateJourney(description, drawioXml, plan as any);
+    return res.json({
+      ok: result.ok,
+      definition: result.definition ?? null,
+      plan: result.plan ?? [],
+      warnings: result.errors ?? [],
+    });
+  } catch (err: any) {
+    console.error("Journey generation error:", err?.message ?? err);
+    return res.status(502).json({ error: aiErrorMessage(err) });
+  }
+});
+
 // Web-based test: runs the REAL conversation path against the latest saved
 // draft, creates a real logged conversation, and returns the bot's replies.
 workflowsRouter.post("/test", async (req: Request, res: Response) => {
