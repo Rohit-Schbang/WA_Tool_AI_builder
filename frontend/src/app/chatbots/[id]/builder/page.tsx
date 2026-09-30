@@ -301,6 +301,31 @@ function BuilderInner() {
     { localDef: any; serverDef: any; savedAt: number } | null
   >(null);
 
+  // ---------------------- VERSIONING ----------------------
+  // Published version history from the server + which version is live.
+  const [versionsInfo, setVersionsInfo] = useState<{
+    versions: { id: string; version: number; publishedAt: string | null; nodeCount: number; isLive: boolean }[];
+    liveVersion: number | null;
+    hasUnpublishedChanges: boolean;
+  } | null>(null);
+  const [showVersions, setShowVersions] = useState(false);
+  // Read-only preview of an old version shown on the canvas (null = editing).
+  const [preview, setPreview] = useState<
+    { version: number; isLive: boolean; publishedAt: string | null; definition: any } | null
+  >(null);
+  const [previewLoading, setPreviewLoading] = useState<number | null>(null);
+  // Pending "Make live" / "Restore to editor" confirmation.
+  const [versionConfirm, setVersionConfirm] = useState<
+    { action: "activate" | "restore"; version: number } | null
+  >(null);
+  const [versionBusy, setVersionBusy] = useState(false);
+  const [versionError, setVersionError] = useState("");
+  // Server says the draft differs from the live version (survives reloads).
+  const serverUnpublishedRef = useRef(false);
+  // After restoring a version into the editor, re-baseline autosave instead of
+  // treating the freshly loaded canvas as a local edit.
+  const reprimeAfterHydrateRef = useRef(false);
+
   const params = useParams();
   const chatbotId = params.id as string;
 
@@ -535,6 +560,8 @@ function BuilderInner() {
       // changes" prompt doesn't reappear on the next load.
       autoSave.primeBaseline(definition);
       clearLocalDraft(chatbotId);
+      // Refresh history so the new version appears and is marked live.
+      loadVersions(true);
       // Publishing makes the bot live -> activate it so the toggle turns on
       // (and it shows as Active on the dashboard).
       if (!isActive) {
@@ -565,6 +592,99 @@ function BuilderInner() {
       /* ignore */
     } finally {
       setActivating(false);
+    }
+  }
+
+  // ---------------------- VERSIONING ----------------------
+  // Fetch version history. `authoritative` = the canvas is known to match the
+  // server draft (right after publish / make live / restore), so the server's
+  // "unpublished changes" answer can also turn the Publish state OFF. On a
+  // plain load we only let it turn the state ON, so unsynced local edits are
+  // never hidden.
+  async function loadVersions(authoritative = false) {
+    try {
+      const res = await api.get(`/api/chatbots/${chatbotId}/workflow/versions`);
+      setVersionsInfo(res.data);
+      const unpublished = !!res.data.hasUnpublishedChanges;
+      serverUnpublishedRef.current = unpublished;
+      if (!baselineCaptured.current) return; // the capture effect will apply it
+      if (unpublished) {
+        publishedBaselineRef.current = "__server_unpublished__";
+        setDirtySincePublish(true);
+      } else if (authoritative) {
+        publishedBaselineRef.current = JSON.stringify(buildDefRef.current());
+        setDirtySincePublish(false);
+      }
+    } catch {
+      /* history is optional; the builder still works without it */
+    }
+  }
+
+  useEffect(() => {
+    loadVersions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function fitCanvas() {
+    setTimeout(() => rfRef.current?.fitView({ padding: 0.2, duration: 400 }), 60);
+  }
+
+  // Show an old version read-only on the canvas.
+  async function openPreview(version: number) {
+    setPreviewLoading(version);
+    setVersionError("");
+    try {
+      const res = await api.get(`/api/chatbots/${chatbotId}/workflow/versions/${version}`);
+      setPreview(res.data);
+      setSelectedId(null);
+      setShowVersions(false);
+      fitCanvas();
+    } catch {
+      setVersionError("Couldn't load that version. Please try again.");
+    } finally {
+      setPreviewLoading(null);
+    }
+  }
+
+  function exitPreview() {
+    setPreview(null);
+    fitCanvas();
+  }
+
+  // Run the confirmed "Make live" or "Restore to editor" action.
+  async function confirmVersionAction() {
+    if (!versionConfirm) return;
+    const { action, version } = versionConfirm;
+    setVersionBusy(true);
+    setVersionError("");
+    try {
+      if (action === "activate") {
+        // Push unsaved canvas edits first so the "unpublished changes" check
+        // compares the real draft against the new live version.
+        await autoSave.syncNow();
+        await api.post(`/api/chatbots/${chatbotId}/workflow/versions/${version}/activate`);
+        setPublishMsg(`v${version} is now live`);
+        setPreview((p) => (p ? { ...p, isLive: p.version === version } : p));
+        await loadVersions(true);
+      } else {
+        const res = await api.post(`/api/chatbots/${chatbotId}/workflow/versions/${version}/restore`);
+        // The server draft now equals this version; drop any stale local backup.
+        clearLocalDraft(chatbotId);
+        reprimeAfterHydrateRef.current = true;
+        hydrateDefinition(res.data.definition);
+        setSelectedId(null);
+        setPreview(null);
+        setSavedMsg(`Restored v${version} to the editor`);
+        fitCanvas();
+        await loadVersions(true);
+      }
+      setVersionConfirm(null);
+    } catch {
+      setVersionError(
+        action === "activate" ? "Couldn't make that version live." : "Couldn't restore that version."
+      );
+    } finally {
+      setVersionBusy(false);
     }
   }
 
@@ -1009,6 +1129,11 @@ function BuilderInner() {
   }
 
   // ---------------------- LOAD DRAFT ----------------------
+  // Always points at the latest buildDefinition, for async handlers (versioning)
+  // that run after a state update and would otherwise see a stale closure.
+  const buildDefRef = useRef(buildDefinition);
+  buildDefRef.current = buildDefinition;
+
   // #11 — on any change to the persisted state, write to localStorage
   // (debounced inside the hook). Only active after initial load.
   const baselineCaptured = useRef(false);
@@ -1023,12 +1148,26 @@ function BuilderInner() {
     // appear even when nothing was edited).
     if (!baselineCaptured.current) {
       baselineCaptured.current = true;
-      publishedBaselineRef.current = current;
       autoSave.primeBaseline(buildDefinition());
-      setDirtySincePublish(false);
+      // If the server already reported that the saved draft differs from the
+      // live version, keep Publish enabled after a reload.
+      if (serverUnpublishedRef.current) {
+        publishedBaselineRef.current = "__server_unpublished__";
+        setDirtySincePublish(true);
+      } else {
+        publishedBaselineRef.current = current;
+        setDirtySincePublish(false);
+      }
       return;
     }
-    autoSave.touch();
+    if (reprimeAfterHydrateRef.current) {
+      // A version was just restored into the editor; the server draft already
+      // matches it, so re-baseline instead of writing a local draft.
+      reprimeAfterHydrateRef.current = false;
+      autoSave.primeBaseline(buildDefinition());
+    } else {
+      autoSave.touch();
+    }
     // Enable Publish only when the serialized definition actually differs from
     // the baseline. Comparing the persisted shape (not raw React Flow state)
     // avoids false positives from mount-time node measurements.
@@ -1105,6 +1244,62 @@ function BuilderInner() {
   // Other nodes for the "Go To Node" dropdown (#6).
   const otherNodes = nodes.filter((n) => n.id !== selectedId);
 
+  // Read-only nodes/edges for previewing an old version. Built separately from
+  // the editable state, so previewing never touches the draft or autosave.
+  const previewGraph = useMemo(() => {
+    if (!preview) return null;
+    const def = preview.definition ?? {};
+    const rawNodes: any[] = def.nodes ?? [];
+    const rawEdges: any[] = def.edges ?? [];
+    const nameOf = (n: any) =>
+      n?.config?.name?.trim() || `${TYPE_LABEL[n?.nodeType] ?? n?.nodeType} ${n?.seq ?? ""}`.trim();
+    const nameById: Record<string, string> = {};
+    rawNodes.forEach((n) => { nameById[n.id] = nameOf(n); });
+
+    const flowNodes: Node[] = rawNodes.map((n, i) => {
+      // Same "option -> connected node" labels the editor shows on cards.
+      const optionTargets: Record<string, string> = {};
+      for (const e of rawEdges) {
+        if (e.source === n.id && e.sourceHandle) optionTargets[e.sourceHandle] = nameById[e.target] ?? "?";
+      }
+      return {
+        id: n.id,
+        type: "workflow",
+        position: {
+          x: Number.isFinite(n.position?.x) ? n.position.x : 300,
+          y: Number.isFinite(n.position?.y) ? n.position.y : 40 + i * 140,
+        },
+        draggable: false,
+        selectable: false,
+        connectable: false,
+        data: { nodeType: n.nodeType, config: n.config ?? {}, seq: n.seq, onDelete: () => {}, optionTargets },
+      };
+    });
+
+    const labelFor = (e: any): string | undefined => {
+      if (!e.sourceHandle) return undefined;
+      const src = rawNodes.find((n) => n.id === e.source);
+      if (!src) return undefined;
+      if (e.sourceHandle === "true") return src.nodeType === "API_REQUEST" ? "success" : "true";
+      if (e.sourceHandle === "else") return src.nodeType === "API_REQUEST" ? "failure" : "else";
+      const opts = [...(src.config?.buttons ?? []), ...(src.config?.rows ?? [])];
+      return opts.find((o: any) => o.id === e.sourceHandle)?.label || undefined;
+    };
+    const flowEdges: Edge[] = rawEdges.map((e) => ({
+      id: e.id,
+      source: e.source,
+      target: e.target,
+      sourceHandle: e.sourceHandle ?? undefined,
+      type: "smoothstep", // plain edge: no inline delete button in preview
+      label: labelFor(e),
+      labelStyle: { fontSize: 10, fontWeight: 600, fill: "#475569" },
+      labelBgStyle: { fill: "#fff", fillOpacity: 0.9 },
+      labelBgPadding: [4, 2] as [number, number],
+      labelBgBorderRadius: 4,
+    }));
+    return { nodes: flowNodes, edges: flowEdges };
+  }, [preview]);
+
   return (
     <div className="flex flex-col h-screen w-screen bg-slate-50 font-sans text-slate-800">
       {/* Full-width top header + toolbar (moved above the workspace) */}
@@ -1164,6 +1359,9 @@ function BuilderInner() {
           >
             <span className={`w-1.5 h-1.5 rounded-full ${isActive ? "bg-emerald-500 animate-pulse" : "bg-slate-400"}`} />
             {isActive ? "Live" : "Inactive"}
+            {versionsInfo?.liveVersion != null && (
+              <span className="font-mono opacity-80">· v{versionsInfo.liveVersion}</span>
+            )}
           </span>
 
           {/* #11 — auto-save status */}
@@ -1205,7 +1403,8 @@ function BuilderInner() {
                 active + no changes   -> "Deactivate" */}
           {(() => {
             const willDeactivate = isActive && !dirtySincePublish;
-            const busy = publishing || activating;
+            // Disabled while previewing: it acts on the draft, not the preview.
+            const busy = publishing || activating || !!preview;
             const label = publishing
               ? "Publishing..."
               : activating
@@ -1285,6 +1484,13 @@ function BuilderInner() {
               <i className="ph ph-plugs-connected text-brand-600 text-sm" />
               <span>API Configs ({apiConfigs.length})</span>
             </button>
+            <button
+              onClick={() => { setVersionError(""); setShowVersions(true); loadVersions(); }}
+              className="px-2.5 py-1 rounded-lg font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-transparent hover:border-slate-200 transition flex items-center space-x-1.5 text-xs"
+            >
+              <i className="ph ph-clock-counter-clockwise text-brand-600 text-sm" />
+              <span>Versions ({versionsInfo?.versions.length ?? 0})</span>
+            </button>
           </div>
         </div>
         <div className="flex items-center space-x-3">
@@ -1341,7 +1547,9 @@ function BuilderInner() {
                   <button
                     key={item.type}
                     onClick={() => addNode(item.type)}
-                    className="group w-full flex items-center justify-between p-2 rounded-lg border border-slate-200 bg-white hover:border-brand-500 hover:bg-brand-50/40 hover:shadow-xs transition text-left"
+                    disabled={!!preview}
+                    title={preview ? "Exit the preview to edit the flow" : undefined}
+                    className="group w-full flex items-center justify-between p-2 rounded-lg border border-slate-200 bg-white hover:border-brand-500 hover:bg-brand-50/40 hover:shadow-xs transition text-left disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:border-slate-200 disabled:hover:bg-white"
                   >
                     <div className="flex items-center space-x-2">
                       <span className={`w-6 h-6 rounded flex items-center justify-center text-xs ${item.accent}`}>
@@ -1367,18 +1575,65 @@ function BuilderInner() {
 
       {/* Canvas */}
       <div className="flex-1 flex flex-col min-w-0 min-h-0">
+        {/* Read-only preview banner */}
+        {preview && (
+          <div className="shrink-0 px-4 py-2.5 bg-indigo-50 border-b border-indigo-200 flex flex-wrap items-center justify-between gap-2 text-xs">
+            <div className="flex items-center gap-2 text-indigo-900">
+              <i className="ph-bold ph-eye text-sm text-indigo-600" />
+              <span className="font-semibold">Previewing v{preview.version}</span>
+              {preview.isLive && (
+                <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 font-semibold text-[10px] uppercase tracking-wide">Live</span>
+              )}
+              <span className="text-indigo-700/80">
+                · Read-only{preview.publishedAt ? ` · Published ${new Date(preview.publishedAt).toLocaleString()}` : ""}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setVersionConfirm({ action: "restore", version: preview.version })}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-semibold transition"
+              >
+                <i className="ph-bold ph-arrow-counter-clockwise text-xs" />
+                Restore to editor
+              </button>
+              {!preview.isLive && (
+                <button
+                  type="button"
+                  onClick={() => setVersionConfirm({ action: "activate", version: preview.version })}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white border border-indigo-200 text-indigo-700 hover:bg-indigo-100 font-semibold transition"
+                >
+                  <i className="ph-bold ph-broadcast text-xs" />
+                  Make live
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={exitPreview}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-indigo-700 hover:bg-indigo-100 font-semibold transition"
+              >
+                <i className="ph-bold ph-x text-xs" />
+                Exit preview
+              </button>
+            </div>
+          </div>
+        )}
         <div className="flex-1 min-h-0 h-full">
           <ReactFlow
-            nodes={nodesForFlow}
-            edges={edgesForFlow}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onConnect={onConnect}
-            onConnectStart={onConnectStart}
-            onConnectEnd={onConnectEnd}
+            nodes={previewGraph ? previewGraph.nodes : nodesForFlow}
+            edges={previewGraph ? previewGraph.edges : edgesForFlow}
+            onNodesChange={previewGraph ? undefined : onNodesChange}
+            onEdgesChange={previewGraph ? undefined : onEdgesChange}
+            onConnect={previewGraph ? undefined : onConnect}
+            onConnectStart={previewGraph ? undefined : onConnectStart}
+            onConnectEnd={previewGraph ? undefined : onConnectEnd}
+            nodesDraggable={!previewGraph}
+            nodesConnectable={!previewGraph}
+            elementsSelectable={!previewGraph}
+            deleteKeyCode={previewGraph ? null : undefined}
             connectionMode={ConnectionMode.Loose}
             connectionRadius={45}
-            onNodeClick={onNodeClick}
+            onNodeClick={previewGraph ? undefined : onNodeClick}
             nodeTypes={nodeTypes}
             edgeTypes={edgeTypes}
             defaultEdgeOptions={{ type: "deletable" }}
@@ -2660,6 +2915,162 @@ function BuilderInner() {
         hasExistingNodes={nodes.filter((n) => n.data.nodeType !== "START").length > 0}
         getCurrentDefinition={buildDefinition}
       />
+
+      {/* Versions panel — published history with preview / make live / restore */}
+      {showVersions && (
+        <div
+          className="fixed inset-0 z-[70] bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setShowVersions(false)}
+        >
+          <div
+            className="bg-white rounded-2xl border border-slate-200/90 shadow-2xl w-[560px] max-w-full max-h-[75vh] overflow-hidden flex flex-col font-sans"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="versions-title"
+          >
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
+              <div className="flex items-center space-x-3">
+                <div className="w-9 h-9 rounded-xl bg-brand-50 border border-brand-200/70 flex items-center justify-center text-brand-600">
+                  <i className="ph-bold ph-clock-counter-clockwise text-lg" />
+                </div>
+                <div>
+                  <h3 id="versions-title" className="text-lg font-bold text-slate-900 tracking-tight">Version history</h3>
+                  <p className="text-xs text-slate-500 mt-0.5">Each publish creates a new version. Preview, restore, or roll back any time.</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowVersions(false)}
+                className="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-400 hover:text-slate-700 transition"
+                aria-label="Close version history"
+              >
+                <i className="ph-bold ph-x text-sm" />
+              </button>
+            </div>
+
+            {versionsInfo?.hasUnpublishedChanges && (
+              <div className="mx-5 mt-4 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-[11px] text-amber-800 flex items-center gap-2">
+                <i className="ph-bold ph-pencil-simple text-xs" />
+                Your editor has changes that aren&apos;t published yet.
+              </div>
+            )}
+            {versionError && (
+              <div className="mx-5 mt-4 px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-[11px] text-rose-700">{versionError}</div>
+            )}
+
+            <div className="flex-1 overflow-y-auto p-5 space-y-2">
+              {!versionsInfo || versionsInfo.versions.length === 0 ? (
+                <div className="py-10 text-center text-xs text-slate-500">
+                  <i className="ph ph-archive text-3xl text-slate-300 block mb-2" />
+                  No published versions yet. Publish your flow to create v1.
+                </div>
+              ) : (
+                versionsInfo.versions.map((v) => (
+                  <div
+                    key={v.id}
+                    className={`rounded-xl border p-3 flex items-center justify-between gap-3 ${
+                      v.isLive ? "border-emerald-200 bg-emerald-50/40" : "border-slate-200 bg-white"
+                    }`}
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono font-bold text-sm text-slate-900">v{v.version}</span>
+                        {v.isLive && (
+                          <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 font-semibold text-[10px] uppercase tracking-wide">Live</span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        {v.publishedAt ? new Date(v.publishedAt).toLocaleString() : "—"} · {v.nodeCount} node{v.nodeCount === 1 ? "" : "s"}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => openPreview(v.version)}
+                        disabled={previewLoading !== null}
+                        className="px-2.5 py-1.5 rounded-lg border border-slate-200 text-[11px] font-semibold text-slate-700 hover:bg-slate-50 transition disabled:opacity-60"
+                      >
+                        {previewLoading === v.version ? "Loading…" : "Preview"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setVersionConfirm({ action: "restore", version: v.version })}
+                        className="px-2.5 py-1.5 rounded-lg border border-slate-200 text-[11px] font-semibold text-slate-700 hover:bg-slate-50 transition"
+                      >
+                        Restore
+                      </button>
+                      {!v.isLive && (
+                        <button
+                          type="button"
+                          onClick={() => setVersionConfirm({ action: "activate", version: v.version })}
+                          className="px-2.5 py-1.5 rounded-lg bg-brand-600 hover:bg-brand-700 text-white text-[11px] font-semibold transition"
+                        >
+                          Make live
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirm "Make live" / "Restore to editor" */}
+      {versionConfirm && (
+        <div
+          className="fixed inset-0 z-[80] bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => !versionBusy && setVersionConfirm(null)}
+        >
+          <div
+            className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="version-confirm-title"
+          >
+            <div className={`h-1.5 w-full ${versionConfirm.action === "activate" ? "bg-brand-600" : "bg-indigo-500"}`} />
+            <div className="p-6">
+              <h2 id="version-confirm-title" className="text-lg font-extrabold text-slate-900 tracking-tight">
+                {versionConfirm.action === "activate"
+                  ? `Make v${versionConfirm.version} live?`
+                  : `Restore v${versionConfirm.version} to the editor?`}
+              </h2>
+              <p className="text-sm text-slate-500 mt-1.5">
+                {versionConfirm.action === "activate"
+                  ? isActive
+                    ? `New conversations will start running v${versionConfirm.version} immediately. Chats already in progress keep their current version. Nothing is deleted, so you can switch back.`
+                    : `v${versionConfirm.version} becomes the version the bot runs. The bot is inactive, so users will get it once you activate it.`
+                  : `Your canvas will be replaced with v${versionConfirm.version}. Any unpublished changes in the editor will be lost. The live bot isn't affected until you publish, which creates a new version.`}
+              </p>
+              {versionError && <p className="text-xs text-rose-600 mt-3">{versionError}</p>}
+              <div className="flex items-center justify-end space-x-2.5 mt-6">
+                <button
+                  onClick={() => setVersionConfirm(null)}
+                  disabled={versionBusy}
+                  className="px-4 py-2 rounded-lg text-xs font-semibold text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition disabled:opacity-60"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmVersionAction}
+                  disabled={versionBusy}
+                  className={`px-4 py-2 rounded-lg text-xs font-semibold text-white shadow-xs transition disabled:opacity-60 ${
+                    versionConfirm.action === "activate" ? "bg-brand-600 hover:bg-brand-700" : "bg-indigo-600 hover:bg-indigo-700"
+                  }`}
+                >
+                  {versionBusy
+                    ? "Working…"
+                    : versionConfirm.action === "activate"
+                    ? `Make v${versionConfirm.version} live`
+                    : `Restore v${versionConfirm.version}`}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* #2 — View Variables modal (overlay, does not shift the canvas) */}
       {showVarList && (

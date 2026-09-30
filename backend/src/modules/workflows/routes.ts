@@ -7,7 +7,15 @@ import { requireAuth } from "../auth/middleware.js";
 import z from "zod";
 import { getChatbot } from "../chatbots/service.js";
 import { Prisma } from "@prisma/client";
-import { getDraft, publishDraft, saveDraft } from "./service.js";
+import {
+  activateVersion,
+  getDraft,
+  getPublishedVersion,
+  listVersions,
+  publishDraft,
+  restoreVersionToDraft,
+  saveDraft,
+} from "./service.js";
 import { handleInboundMessage } from "../conversations/service.js";
 import { ConsoleAdapter } from "../messaging/adapters.js";
 import { generateJourney, planOnly, makeEditContext } from "./generator.js";
@@ -70,6 +78,63 @@ workflowsRouter.post("/publish", async (req: Request, res: Response) => {
 
 })
 
+
+// ---------------------------------------------------------------------------
+// Versioning
+// ---------------------------------------------------------------------------
+
+// GET ---------->>>>          api/chatbots/:chatbotId/workflow/versions
+workflowsRouter.get("/versions", async (req: Request, res: Response) => {
+  const chatbotId = req.params.chatbotId;
+  const bot = await getChatbot(req.userId!, chatbotId);
+  if (!bot) return res.status(404).json({ error: "Chatbot not found" });
+
+  return res.json(await listVersions(chatbotId));
+});
+
+// GET ---------->>>>          api/chatbots/:chatbotId/workflow/versions/:version
+// Full definition of one published version (read-only preview).
+workflowsRouter.get("/versions/:version", async (req: Request, res: Response) => {
+  const chatbotId = req.params.chatbotId;
+  const bot = await getChatbot(req.userId!, chatbotId);
+  if (!bot) return res.status(404).json({ error: "Chatbot not found" });
+
+  const row = await getPublishedVersion(chatbotId, Number(req.params.version));
+  if (!row) return res.status(404).json({ error: "Version not found" });
+
+  return res.json({
+    version: row.version,
+    publishedAt: row.publishedAt,
+    isLive: row.id === bot.activeVersionId,
+    definition: row.definition,
+  });
+});
+
+// POST ---------->>>>         api/chatbots/:chatbotId/workflow/versions/:version/activate
+// "Make live": the bot immediately starts running this version.
+workflowsRouter.post("/versions/:version/activate", async (req: Request, res: Response) => {
+  const chatbotId = req.params.chatbotId;
+  const bot = await getChatbot(req.userId!, chatbotId);
+  if (!bot) return res.status(404).json({ error: "Chatbot not found" });
+
+  const row = await activateVersion(chatbotId, Number(req.params.version));
+  if (!row) return res.status(404).json({ error: "Version not found" });
+
+  return res.json({ ok: true, liveVersion: row.version });
+});
+
+// POST ---------->>>>         api/chatbots/:chatbotId/workflow/versions/:version/restore
+// "Restore to editor": copy this version into the draft (canvas).
+workflowsRouter.post("/versions/:version/restore", async (req: Request, res: Response) => {
+  const chatbotId = req.params.chatbotId;
+  const bot = await getChatbot(req.userId!, chatbotId);
+  if (!bot) return res.status(404).json({ error: "Chatbot not found" });
+
+  const draft = await restoreVersionToDraft(chatbotId, Number(req.params.version));
+  if (!draft) return res.status(404).json({ error: "Version not found" });
+
+  return res.json({ ok: true, definition: draft.definition });
+});
 
 // POST /api/chatbots/:chatbotId/workflow/ping
 // Server-side reachability check for a (third-party) URL. Runs from the backend

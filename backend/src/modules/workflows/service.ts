@@ -103,6 +103,98 @@ export async function testStep(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Versioning: list / preview / make live / restore to editor.
+// ---------------------------------------------------------------------------
+
+// Reduce a definition to its meaningful content in a stable order, so a draft
+// and a published version can be compared regardless of key order/extra fields.
+function normalizeDefinition(def: any): string {
+    if (!def) return "";
+    const nodes = (def.nodes ?? [])
+        .map((n: any) => ({
+            id: n.id,
+            nodeType: n.nodeType,
+            position: { x: Math.round(n.position?.x ?? 0), y: Math.round(n.position?.y ?? 0) },
+            config: n.config ?? {},
+        }))
+        .sort((a: any, b: any) => String(a.id).localeCompare(String(b.id)));
+    const edges = (def.edges ?? [])
+        .map((e: any) => ({ source: e.source, target: e.target, sourceHandle: e.sourceHandle ?? null }))
+        .sort((a: any, b: any) =>
+            `${a.source}-${a.sourceHandle}-${a.target}`.localeCompare(`${b.source}-${b.sourceHandle}-${b.target}`)
+        );
+    return JSON.stringify({ variables: def.variables ?? [], apiConfigs: def.apiConfigs ?? [], nodes, edges });
+}
+
+export interface VersionSummary {
+    id: string;
+    version: number;
+    publishedAt: Date | null;
+    nodeCount: number;
+    isLive: boolean;
+}
+
+// All published versions (newest first) + which one is live + whether the
+// draft has changes that aren't published to the live version.
+export async function listVersions(chatbotId: string) {
+    const chatbot = await prisma.chatbot.findUnique({ where: { id: chatbotId } });
+    const rows = await prisma.workflowVersion.findMany({
+        where: { chatbotId, status: "PUBLISHED" },
+        orderBy: { version: "desc" },
+    });
+
+    const versions: VersionSummary[] = rows.map((r) => ({
+        id: r.id,
+        version: r.version,
+        publishedAt: r.publishedAt,
+        nodeCount: Array.isArray((r.definition as any)?.nodes) ? (r.definition as any).nodes.length : 0,
+        isLive: r.id === chatbot?.activeVersionId,
+    }));
+
+    const live = rows.find((r) => r.id === chatbot?.activeVersionId) ?? null;
+    const draft = await getDraft(chatbotId);
+    // No live version yet -> any draft content counts as unpublished.
+    const hasUnpublishedChanges = draft
+        ? !live || normalizeDefinition(draft.definition) !== normalizeDefinition(live.definition)
+        : false;
+
+    return {
+        versions,
+        liveVersion: live?.version ?? null,
+        hasUnpublishedChanges,
+    };
+}
+
+// One published version (with its full definition) for read-only preview.
+export async function getPublishedVersion(chatbotId: string, version: number) {
+    if (!Number.isInteger(version) || version < 1) return null;
+    return prisma.workflowVersion.findFirst({
+        where: { chatbotId, version, status: "PUBLISHED" },
+    });
+}
+
+// "Make live": point the chatbot at an existing published version. Nothing is
+// deleted and history is unchanged; in-flight conversations stay pinned to the
+// version they started on.
+export async function activateVersion(chatbotId: string, version: number) {
+    const row = await getPublishedVersion(chatbotId, version);
+    if (!row) return null;
+    await prisma.chatbot.update({
+        where: { id: chatbotId },
+        data: { activeVersionId: row.id },
+    });
+    return row;
+}
+
+// "Restore to editor": copy a published version's definition into the draft.
+// Publishing afterwards creates a new version number (history only moves forward).
+export async function restoreVersionToDraft(chatbotId: string, version: number) {
+    const row = await getPublishedVersion(chatbotId, version);
+    if (!row) return null;
+    return saveDraft(chatbotId, row.definition as Prisma.InputJsonValue);
+}
+
 // Validate the draft, then create an inmmutable published version.
 
 export async function publishDraft(chatbotId: string): Promise<PublishResult> {
