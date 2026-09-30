@@ -96,6 +96,7 @@ function repair(raw: any): GeneratedDefinition {
   }
 
   const nodeIds = new Set(nodes.map((n) => n.id));
+  const seenEdge = new Set<string>();
   const edges = rawEdges
     .filter((e) => e && nodeIds.has(String(e.source)) && nodeIds.has(String(e.target)) && String(e.target) !== "start")
     .map((e, i) => ({
@@ -103,7 +104,15 @@ function repair(raw: any): GeneratedDefinition {
       source: String(e.source),
       target: String(e.target),
       sourceHandle: e.sourceHandle != null ? String(e.sourceHandle) : null,
-    }));
+    }))
+    // Drop duplicate edges (same source + target + handle) — the AI sometimes
+    // emits the same connection twice, which would double-render on the canvas.
+    .filter((e) => {
+      const key = `${e.source}|${e.target}|${e.sourceHandle ?? ""}`;
+      if (seenEdge.has(key)) return false;
+      seenEdge.add(key);
+      return true;
+    });
 
   const variables = rawVars
     .filter((v) => v && v.name)
@@ -143,31 +152,51 @@ export interface GenerateResult {
 // Each call is smaller and more focused, which sharply reduces hallucination.
 // ---------------------------------------------------------------------------
 
+// When editing, we pass the existing journey so the PLAN describes just the
+// change. `editInstruction` is what the user wants; `anchorNodeId` (optional)
+// pins where to insert/act so the AI doesn't guess the position.
+interface EditContext {
+  existing: { variables?: any[]; nodes: any[]; edges: any[] };
+  editInstruction: string;
+  anchorNodeId?: string;
+}
+
+function editContextBlock(ctx?: EditContext): string {
+  if (!ctx) return "";
+  const anchor = ctx.anchorNodeId
+    ? `\nIMPORTANT: apply the change relative to the node with id "${ctx.anchorNodeId}" (insert immediately after it / act on it as the anchor).\n`
+    : "";
+  return `\nThis is an EDIT of an existing journey. Here is the CURRENT journey:\n${JSON.stringify(ctx.existing, null, 2)}\n${anchor}
+Plan ONLY the change described below (do not re-plan the whole journey). List
+the stage(s) being added, edited, or removed and where they sit in the flow:\n"""\n${ctx.editInstruction}\n"""\n`;
+}
+
 // STEP 1 — PLAN: outline the journey as ordered stages (no workflow JSON yet).
-async function planJourney(description: string, drawioXml?: string): Promise<PlanStage[]> {
+async function planJourney(description: string, drawioXml?: string, edit?: EditContext): Promise<PlanStage[]> {
   let p = `You are an expert WhatsApp chatbot flow architect. Before building anything,
 PLAN the journey as an ordered list of stages (like a coding agent writing TODOs).
 
 ${NODE_CATALOG}
 
-Think step by step about the user's goal and produce the sequence of stages.
+Think step by step about the goal and produce the sequence of stages.
 For each stage give: the step number, a short title, the single nodeType it maps
 to (from the catalog above), and a detail describing what it does and how it
 branches (mention button/list options and true/else branches explicitly).
 
 Return STRICT JSON: { "plan": [ { "step": number, "title": string, "nodeType": string, "detail": string } ] }
 Start the plan with the START node. Be complete but concise.\n`;
-  p += `\nUser's description:\n"""\n${description || "(none provided)"}\n"""\n`;
+  if (description) p += `\nUser's description:\n"""\n${description}\n"""\n`;
   if (drawioXml && drawioXml.trim()) {
     p += `\nThe user also provided a draw.io diagram (XML). Use its shapes/arrows as the structural backbone of your plan:\n"""\n${drawioXml.slice(0, 20000)}\n"""\n`;
   }
+  p += editContextBlock(edit);
 
   const raw = await generateJson(p);
   const plan: PlanStage[] = Array.isArray(raw?.plan) ? raw.plan : [];
   return plan;
 }
 
-// STEP 2 — BUILD: turn the approved plan into strict workflow JSON.
+// STEP 2 — BUILD (create): turn the approved plan into strict workflow JSON.
 async function buildFromPlan(description: string, plan: PlanStage[], drawioXml?: string, fixErrors?: string[]): Promise<GeneratedDefinition> {
   let p = `You are an expert WhatsApp chatbot flow builder. Build the workflow JSON by
 following the APPROVED PLAN below EXACTLY — one node per stage, wired in order,
@@ -183,6 +212,41 @@ Original user description (for wording of messages etc.):
 """\n${description || "(none provided)"}\n"""\n`;
   if (fixErrors && fixErrors.length) {
     p += `\nYour previous build failed checks with these errors — fix them and return corrected JSON:\n- ${fixErrors.join("\n- ")}\n`;
+  }
+  const raw = await generateJson(p);
+  return repair(raw);
+}
+
+// EDIT BUILD — apply the approved change-plan to the EXISTING flow as a PATCH,
+// preserving the ids of nodes that stay (so the frontend keeps their positions
+// and only new nodes are placed). Cheaper than full regeneration.
+async function patchBuild(edit: EditContext, plan: PlanStage[], fixErrors?: string[]): Promise<GeneratedDefinition> {
+  const anchor = edit.anchorNodeId
+    ? `\nInsert/act relative to the node with id "${edit.anchorNodeId}". If adding a node "after" it, rewire: the edge that currently leaves "${edit.anchorNodeId}" must now point to the NEW node, and the new node connects to that edge's old target.\n`
+    : "";
+  let p = `You are PATCHING an existing WhatsApp workflow. Apply ONLY the approved change
+below to the current workflow and return the COMPLETE updated workflow as JSON.
+
+${NODE_CATALOG}
+${RULES}
+
+CRITICAL PATCH RULES:
+- PRESERVE the existing "id" of every node you keep. Only assign NEW ids
+  (like "n_new1") to nodes you add.
+- Keep every part the change doesn't touch EXACTLY as-is (same ids, config).
+- To insert a node "after X": rewire the edge leaving X to point to the new
+  node, then connect the new node to X's old target. Do NOT append at the end.
+- To delete a node: omit it and reconnect its predecessor to its successor.
+${anchor}
+APPROVED CHANGE PLAN:
+${JSON.stringify(plan, null, 2)}
+
+CURRENT WORKFLOW:
+${JSON.stringify(edit.existing, null, 2)}
+
+Change instruction (for wording): """\n${edit.editInstruction}\n"""\n`;
+  if (fixErrors && fixErrors.length) {
+    p += `\nYour previous patch failed checks with these errors — fix them and return corrected JSON:\n- ${fixErrors.join("\n- ")}\n`;
   }
   const raw = await generateJson(p);
   return repair(raw);
@@ -212,8 +276,10 @@ ${JSON.stringify({ variables: def.variables, nodes: def.nodes.map(n => ({ id: n.
 }
 
 // Public: STEP 1 only — produce the plan for the user to review/approve.
-export async function planOnly(description: string, drawioXml?: string): Promise<PlanStage[]> {
-  const plan = await planJourney(description, drawioXml);
+// When `edit` is given, the plan is for a REGENERATION of the existing journey
+// with the requested change folded in (create-new-from-original, not a patch).
+export async function planOnly(description: string, drawioXml?: string, edit?: EditContext): Promise<PlanStage[]> {
+  const plan = await planJourney(description, drawioXml, edit);
   // number the stages defensively
   return plan.map((s, i) => ({
     step: Number(s.step) || i + 1,
@@ -226,44 +292,44 @@ export async function planOnly(description: string, drawioXml?: string): Promise
 export async function generateJourney(
   description: string,
   drawioXml?: string,
-  approvedPlan?: PlanStage[]
+  approvedPlan?: PlanStage[],
+  edit?: EditContext
 ): Promise<GenerateResult> {
   // 1) PLAN — reuse the user-approved plan if provided, else generate one.
   let plan: PlanStage[] = Array.isArray(approvedPlan) && approvedPlan.length ? approvedPlan : [];
   if (!plan.length) {
     try {
-      plan = await planJourney(description, drawioXml);
+      plan = await planJourney(description, drawioXml, edit);
     } catch {
       plan = []; // planning is best-effort; build can still proceed
     }
   }
 
-  // 2) BUILD from the plan
-  let def = await buildFromPlan(description, plan, drawioXml);
-
-  // 3) QC self-review pass (best-effort; keep the build if QC fails)
-  try {
-    const reviewed = await qcReview(plan, def);
-    // Only accept the QC output if it still has the core structure.
-    if (reviewed.nodes.length >= Math.max(1, def.nodes.length - 1)) {
-      def = reviewed;
-    }
-  } catch {
-    /* keep the pre-QC build */
+  // 2) BUILD — for EDITS, patch the existing flow (preserve ids/positions).
+  //    For CREATE, build the whole flow from the plan then QC it.
+  let def: GeneratedDefinition;
+  if (edit) {
+    def = await patchBuild(edit, plan);
+  } else {
+    def = await buildFromPlan(description, plan, drawioXml);
+    // QC self-review pass (create only; best-effort).
+    try {
+      const reviewed = await qcReview(plan, def);
+      if (reviewed.nodes.length >= Math.max(1, def.nodes.length - 1)) def = reviewed;
+    } catch { /* keep the pre-QC build */ }
   }
 
   // Deterministic validation.
   let result = validateWorkflow({ nodes: def.nodes, edges: def.edges } as any);
 
-  // One repair pass feeding the validator's errors back to the builder.
+  // One repair pass feeding the validator's errors back.
   if (!result.valid) {
     try {
-      const def2 = await buildFromPlan(description, plan, drawioXml, result.errors.map((e) => e.message));
+      const def2 = edit
+        ? await patchBuild(edit, plan, result.errors.map((e) => e.message))
+        : await buildFromPlan(description, plan, drawioXml, result.errors.map((e) => e.message));
       const result2 = validateWorkflow({ nodes: def2.nodes, edges: def2.edges } as any);
-      if (result2.valid) {
-        return { ok: true, definition: def2, plan };
-      }
-      // Return the repaired attempt but flag remaining issues for review.
+      if (result2.valid) return { ok: true, definition: def2, plan };
       return { ok: false, definition: def2, plan, errors: result2.errors.map((e) => e.message) };
     } catch {
       return { ok: false, definition: def, plan, errors: result.errors.map((e) => e.message) };
@@ -272,3 +338,24 @@ export async function generateJourney(
 
   return { ok: true, definition: def, plan };
 }
+
+// Public helper: build an EditContext from a current definition + instruction.
+export function makeEditContext(existing: any, editInstruction: string, anchorNodeId?: string): EditContext {
+  return {
+    existing: {
+      variables: existing?.variables ?? [],
+      nodes: (existing?.nodes ?? []).map((n: any) => ({ id: n.id, nodeType: n.nodeType, config: n.config })),
+      edges: (existing?.edges ?? []).map((e: any) => ({ source: e.source, target: e.target, sourceHandle: e.sourceHandle ?? null })),
+    },
+    editInstruction,
+    anchorNodeId: anchorNodeId || undefined,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// EDIT MODE — incremental changes to an EXISTING workflow.
+//
+// Edit mode is now a REGENERATION: the plan/build pipeline above receives the
+// existing journey via `EditContext` and produces a complete updated journey
+// that incorporates the requested change. See makeEditContext + generateJourney.
+// ---------------------------------------------------------------------------
