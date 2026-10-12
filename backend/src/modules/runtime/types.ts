@@ -50,6 +50,34 @@ export interface WorkflowDefinition {
 // The execution context passed to every executor
 // It carries everything a node needs to do its job.
 
+// The kind of inbound WhatsApp message the user sent. Mirrors Meta's webhook
+// `message.type`. "text" is the default; the rest are media/interactive types a
+// Question (ASK_INPUT) node can be configured to expect.
+export type InboundType =
+    | "text"
+    | "image"
+    | "audio"
+    | "video"
+    | "document"
+    | "location"
+    | "contacts"
+    | "interactive" // button/list reply
+    | "unknown";
+
+// Media metadata extracted from an inbound message. For media types WhatsApp
+// gives us a media `id` (used to download the file via the Graph API) plus the
+// mime type, an optional caption, and (documents) a filename. Location carries
+// lat/long instead.
+export interface InboundMedia {
+    id?: string;          // Meta media id (download via /{id})
+    mimeType?: string;
+    caption?: string;     // image/video/document caption text, if any
+    filename?: string;    // document filename, if any
+    sha256?: string;
+    latitude?: number;    // location
+    longitude?: number;   // location
+}
+
 export interface ExecutionContext {
     // --------------->>>>>>          The Whatsapp user's id (their phone number)
     userId: string
@@ -57,6 +85,11 @@ export interface ExecutionContext {
     variables: Record<string, any>;
     // --------------->>>>>>          The latest inbound message text (for ASK_INPUT to capture)
     incomingText: string | null
+    // --------------->>>>>>          The type of the latest inbound message (text/image/audio/…).
+    //                                 null when we're arriving at a node (no user reply yet).
+    incomingType?: InboundType | null
+    // --------------->>>>>>          Media/location payload of the latest inbound message, if any.
+    incomingMedia?: InboundMedia | null
     // --------------->>>>>>            How  the runtime sends message out
     messaging: MessagingAdapter
     // #1 — global API configs keyed by name (for API_REQUEST nodes).

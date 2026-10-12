@@ -200,6 +200,14 @@ const generateSchema = z.object({
   }).passthrough().optional(),
   // Optional: pin where the edit applies (a node id) so the AI doesn't guess.
   anchorNodeId: z.string().optional(),
+  // The builder's current global API configs, so the AI can reference them by
+  // name (API_REQUEST nodes are global-config-only; no inline URLs).
+  apiConfigs: z.array(z.object({
+    name: z.string(),
+    baseUrl: z.string().optional(),
+    headers: z.array(z.any()).optional(),
+    endpoints: z.array(z.any()).optional(),
+  }).passthrough()).optional(),
 });
 
 const aiErrorMessage = (err: any) =>
@@ -218,15 +226,17 @@ workflowsRouter.post("/generate-plan", async (req: Request, res: Response) => {
   const parsed = generateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "Invalid input", details: parsed.error.flatten() });
 
-  const { description, drawioXml, editInstruction, currentDefinition, anchorNodeId } = parsed.data;
+  const { description, drawioXml, editInstruction, currentDefinition, anchorNodeId, apiConfigs } = parsed.data;
   const isEdit = !!(editInstruction?.trim() && currentDefinition);
   if (!description.trim() && !drawioXml?.trim() && !isEdit) {
     return res.status(400).json({ error: "Provide a description, a draw.io diagram, or an edit instruction." });
   }
+  // Prefer explicit apiConfigs; fall back to those embedded in currentDefinition (edit mode).
+  const configs = apiConfigs ?? (currentDefinition as any)?.apiConfigs;
 
   try {
     const editCtx = isEdit ? makeEditContext(currentDefinition, editInstruction!, anchorNodeId) : undefined;
-    const plan = await planOnly(description, drawioXml, editCtx);
+    const plan = await planOnly(description, drawioXml, editCtx, configs);
     return res.json({ plan });
   } catch (err: any) {
     console.error("Journey plan error:", err?.message ?? err);
@@ -243,15 +253,16 @@ workflowsRouter.post("/generate", async (req: Request, res: Response) => {
   const parsed = generateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "Invalid input", details: parsed.error.flatten() });
 
-  const { description, drawioXml, plan, editInstruction, currentDefinition, anchorNodeId } = parsed.data;
+  const { description, drawioXml, plan, editInstruction, currentDefinition, anchorNodeId, apiConfigs } = parsed.data;
   const isEdit = !!(editInstruction?.trim() && currentDefinition);
   if (!description.trim() && !drawioXml?.trim() && !(plan && plan.length) && !isEdit) {
     return res.status(400).json({ error: "Provide a description, a draw.io diagram, or an edit instruction." });
   }
+  const configs = apiConfigs ?? (currentDefinition as any)?.apiConfigs;
 
   try {
     const editCtx = isEdit ? makeEditContext(currentDefinition, editInstruction!, anchorNodeId) : undefined;
-    const result = await generateJourney(description, drawioXml, plan as any, editCtx);
+    const result = await generateJourney(description, drawioXml, plan as any, editCtx, configs);
     return res.json({
       ok: result.ok,
       definition: result.definition ?? null,

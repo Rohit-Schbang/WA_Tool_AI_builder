@@ -4,7 +4,7 @@ import { z } from "zod";
 import { getChatbot } from "../../chatbots/service.js";
 import { getConnection, ToSafeConnection, upsertConnection } from "./service.js";
 import { config } from "../../../infra/config.js";
-import { completeEmbeddedSignup, isEmbeddedSignupConfigured, EmbeddedSignupError } from "./embeddedSignup.js";
+import { completeEmbeddedSignup, isEmbeddedSignupConfigured, EmbeddedSignupError, getConnectionHealth } from "./embeddedSignup.js";
 export const whatsappRouter = Router();
 
 
@@ -81,8 +81,23 @@ connectionRouter.get("/meta-config", async (req: Request, res: Response) => {
     enabled: isEmbeddedSignupConfigured(),
     appId: config.META_APP_ID ?? null,
     configId: config.META_CONFIG_ID ?? null,
+    solutionId: config.META_SOLUTION_ID ?? null,
     graphVersion: config.META_GRAPH_VERSION,
   })
+})
+
+// GET ---> api/chatbots/:chatbotId/connection/health
+// Live number health for the dashboard (quality rating, verification, display
+// name). Fetches fresh values from Meta and caches them; falls back to the
+// last-known snapshot if Meta is unreachable. Never returns secrets.
+connectionRouter.get("/health", async (req: Request, res: Response) => {
+  const bot = await getChatbot(req.userId!!, req.params.chatbotId)
+  if (!bot) return res.status(404).json({ error: "Chatbot not found" })
+
+  const health = await getConnectionHealth(req.params.chatbotId)
+  if (!health) return res.status(404).json({ error: "No Connection Configured" })
+
+  return res.json(health)
 })
 
 // POST ---> api/chatbots/:chatbotId/connection/embedded-signup

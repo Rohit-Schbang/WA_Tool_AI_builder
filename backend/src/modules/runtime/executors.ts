@@ -1,6 +1,6 @@
 import { generateAiReply } from "./aiProvider.js";
 import { evalExpression } from "./sandbox.js";
-import type { NodeExecutor } from "./types.js";
+import type { NodeExecutor, ExecutorResult } from "./types.js";
 
 // Replace {{variable}} placeholders in a string with values from context.
 function interpolate(text: string, variables: Record<string, any>): string {
@@ -89,6 +89,30 @@ function askInputValid(validationType: string, regex: string | undefined, value:
   }
 }
 
+// Does the inbound message's type satisfy what the Question node expects?
+// expectedType "text" (default) or "any" keep the original text behaviour;
+// media types require a matching inbound type. "any" accepts anything.
+function inboundTypeMatches(expected: string, actual: string | null | undefined): boolean {
+  const want = (expected || "text").toLowerCase();
+  const got = (actual || "text").toLowerCase();
+  if (want === "any") return true;
+  if (want === "text") {
+    // A text question also accepts an interactive (button/list) reply, which is
+    // effectively a text selection.
+    return got === "text" || got === "interactive";
+  }
+  return want === got;
+}
+
+// Friendly label for the expected media type, used in the default retry prompt.
+const EXPECTED_TYPE_LABEL: Record<string, string> = {
+  image: "a photo/image",
+  audio: "an audio message",
+  video: "a video",
+  document: "a document/file",
+  location: "a location",
+};
+
 const askInput: NodeExecutor = async (node, ctx) => {
   const cfg = node.config ?? {};
   // If there's no incoming message, we're ARRIVING at this node:
@@ -101,44 +125,68 @@ const askInput: NodeExecutor = async (node, ctx) => {
     return { action: "wait" };
   }
 
+  const expectedType: string = (cfg.expectedType ?? "text").toLowerCase();
   const validationType = cfg.validationType ?? "none";
   const variable = cfg.variable;
-
-  // No validation configured — capture and move on (original behavior).
-  if (validationType === "none") {
-    if (variable) ctx.variables[variable] = ctx.incomingText;
-    return { action: "next" };
-  }
-
-  // Validate the reply.
   const retryKey = `__retry_${node.id}`;
-  if (askInputValid(validationType, cfg.regex, ctx.incomingText)) {
-    // Valid — store, clear the retry counter, continue.
-    if (variable) ctx.variables[variable] = ctx.incomingText;
-    delete ctx.variables[retryKey];
-    return { action: "next" };
-  }
+  const incomingType = ctx.incomingType ?? "text";
+  const media = ctx.incomingMedia ?? null;
 
-  // Invalid — increment retry counter.
-  const attempts = Number(ctx.variables[retryKey] ?? 0) + 1;
-  const limit = Math.max(1, Math.min(5, Number(cfg.retryLimit ?? 3)));
+  // Store the captured answer. For media types we store a structured object
+  // (media id/caption/etc) so later nodes can download/forward it; for text we
+  // store the string exactly as before.
+  const storeAnswer = () => {
+    if (!variable) return;
+    if (expectedType !== "text" && expectedType !== "any" && media) {
+      ctx.variables[variable] = { type: incomingType, ...media, text: ctx.incomingText || undefined };
+    } else {
+      ctx.variables[variable] = ctx.incomingText;
+    }
+  };
+
+  // Build the failure/invalid prompt (shared by type- and text-validation).
   const failMsg = cfg.failureMessage
     ? interpolate(cfg.failureMessage, ctx.variables)
-    : "That doesn't look valid. Please try again.";
+    : expectedType !== "text" && expectedType !== "any"
+      ? `Please send ${EXPECTED_TYPE_LABEL[expectedType] ?? "the requested attachment"}.`
+      : "That doesn't look valid. Please try again.";
+  const limit = Math.max(1, Math.min(5, Number(cfg.retryLimit ?? 3)));
 
-  if (attempts >= limit) {
-    // Retries exhausted — show the failure message once, store the last
-    // value anyway, and continue so the flow doesn't get stuck.
+  const failOrRetry = async (): Promise<ExecutorResult> => {
+    const attempts = Number(ctx.variables[retryKey] ?? 0) + 1;
+    if (attempts >= limit) {
+      // Retries exhausted — show the failure message once, store whatever we
+      // got anyway, and continue so the flow doesn't get stuck.
+      await ctx.messaging.sendText(ctx.userId, failMsg);
+      storeAnswer();
+      delete ctx.variables[retryKey];
+      return { action: "next" };
+    }
+    ctx.variables[retryKey] = attempts;
     await ctx.messaging.sendText(ctx.userId, failMsg);
-    if (variable) ctx.variables[variable] = ctx.incomingText;
+    return { action: "wait" };
+  };
+
+  // 1) Enforce the expected INPUT TYPE first (image/audio/document/…).
+  if (!inboundTypeMatches(expectedType, incomingType)) {
+    return failOrRetry();
+  }
+
+  // 2) For media/location/any answers, there's no text regex to run — accept.
+  if (expectedType !== "text" || validationType === "none") {
+    storeAnswer();
     delete ctx.variables[retryKey];
     return { action: "next" };
   }
 
-  // Still have retries left — record the count, re-prompt, wait.
-  ctx.variables[retryKey] = attempts;
-  await ctx.messaging.sendText(ctx.userId, failMsg);
-  return { action: "wait" };
+  // 3) Text answer with a text validation — run the regex check as before.
+  if (askInputValid(validationType, cfg.regex, ctx.incomingText ?? "")) {
+    storeAnswer();
+    delete ctx.variables[retryKey];
+    return { action: "next" };
+  }
+
+  return failOrRetry();
 };
 
 // Evaluate an If/Else condition using the operator chosen in the builder.
@@ -340,22 +388,43 @@ const transformNode: NodeExecutor = async (node, ctx) => {
 const apiRequestNode: NodeExecutor = async (node, ctx) => {
   const cfg = node.config ?? {};
 
-  // #1 — merge an optional global API config (base URL, shared headers).
+  // Global-config-only policy: an API_REQUEST MUST reference a saved global API
+  // config (base URL + shared headers) by name. Inline url/method/headers/body
+  // are no longer honored — this keeps every outbound call going through a
+  // reviewed, central definition. If the config (or its chosen endpoint) can't
+  // be resolved, we fail down the "else" branch rather than calling a URL the
+  // operator didn't vet.
   const global = ctx.apiConfigs?.[cfg.apiConfig] ?? null;
+  if (!global) {
+    if (cfg.statusVariable) ctx.variables[cfg.statusVariable] = "error";
+    if (cfg.errorVariable) ctx.variables[cfg.errorVariable] = "No global API config selected for this request.";
+    console.error(`API_REQUEST node "${node.id}" has no valid global API config (apiConfig="${cfg.apiConfig ?? ""}").`);
+    return { action: "next", handle: "else" };
+  }
 
-  // If the node references a named CRUD endpoint from the global config, use
-  // its method / path / body as defaults (the node can still override url/body).
-  const endpoint = global?.endpoints?.find((e: any) => e.id === cfg.endpointId) ?? null;
+  // The call targets a named endpoint within the global config. If the config
+  // defines endpoints, one must be chosen; a config with no endpoints hits its
+  // base URL directly.
+  const endpoints: any[] = global.endpoints ?? [];
+  const endpoint = endpoints.find((e: any) => e.id === cfg.endpointId) ?? null;
+  if (endpoints.length > 0 && !endpoint) {
+    if (cfg.statusVariable) ctx.variables[cfg.statusVariable] = "error";
+    if (cfg.errorVariable) ctx.variables[cfg.errorVariable] = "No endpoint selected from the global API config.";
+    console.error(`API_REQUEST node "${node.id}" did not select a valid endpoint from config "${cfg.apiConfig}".`);
+    return { action: "next", handle: "else" };
+  }
 
-  const method = (cfg.method || endpoint?.method || "GET").toUpperCase();
+  // Method / path / body all come from the global config + endpoint only.
+  const method = (endpoint?.method || "GET").toUpperCase();
 
-  // Build URL: global base + (node url OR endpoint path), interpolated.
-  let url = interpolate(cfg.url || endpoint?.path || "", ctx.variables);
-  if (global?.baseUrl && !/^https?:\/\//i.test(url)) {
+  // Build URL from the global base URL + the endpoint path (interpolated).
+  let url = interpolate(endpoint?.path ?? "", ctx.variables);
+  if (global.baseUrl && !/^https?:\/\//i.test(url)) {
     url = global.baseUrl.replace(/\/$/, "") + "/" + url.replace(/^\//, "");
   }
 
-  // Query params.
+  // Per-call query params stay node-level (they parameterise the call, they
+  // don't define a new API). Supports {{vars}}.
   const query: Record<string, string> = {};
   for (const q of cfg.query ?? []) {
     if (q?.key) query[q.key] = interpolate(String(q.value ?? ""), ctx.variables);
@@ -363,18 +432,15 @@ const apiRequestNode: NodeExecutor = async (node, ctx) => {
   const qs = new URLSearchParams(query).toString();
   if (qs) url += (url.includes("?") ? "&" : "?") + qs;
 
-  // Headers: global shared headers + node headers.
+  // Headers come only from the global config's shared headers.
   const headers: Record<string, string> = {};
-  for (const h of global?.headers ?? []) {
-    if (h?.key) headers[h.key] = interpolate(String(h.value ?? ""), ctx.variables);
-  }
-  for (const h of cfg.headers ?? []) {
+  for (const h of global.headers ?? []) {
     if (h?.key) headers[h.key] = interpolate(String(h.value ?? ""), ctx.variables);
   }
 
-  // Body (for non-GET). Node body wins; else the endpoint's body template.
+  // Body (for non-GET) comes from the endpoint's body template only.
   let body: string | undefined;
-  const bodyTemplate = cfg.body || endpoint?.body;
+  const bodyTemplate = endpoint?.body;
   if (method !== "GET" && method !== "DELETE" && bodyTemplate) {
     body = interpolate(bodyTemplate, ctx.variables);
     if (!headers["Content-Type"] && !headers["content-type"]) {

@@ -1,5 +1,6 @@
 import { config } from "../../../infra/config.js";
-import { upsertConnection } from "./service.js";
+import { getConnection, upsertConnection } from "./service.js";
+import { prisma } from "../../../infra/prisma.js";
 import type { Connection } from "@prisma/client";
 
 // WhatsApp Embedded Signup (Meta) — server-side flow.
@@ -106,16 +107,40 @@ async function getPhoneDetails(phoneNumberId: string, token: string): Promise<{ 
 }
 
 // Step 3 — subscribe our app to the WABA's webhooks (must precede registration).
+// BSP-grade: after subscribing we verify the subscription actually took, so a
+// silent failure doesn't leave a tenant that never receives inbound messages.
 async function subscribeApp(wabaId: string, token: string): Promise<void> {
   await graphFetch(
     `${GRAPH()}/${wabaId}/subscribed_apps`,
     { method: "POST", headers: { Authorization: `Bearer ${token}` } },
     "Subscribe app to WABA"
   );
+
+  // Verify our app id is present in the WABA's subscribed apps list.
+  try {
+    const list = await graphFetch(
+      `${GRAPH()}/${wabaId}/subscribed_apps`,
+      { headers: { Authorization: `Bearer ${token}` } },
+      "Verify WABA subscription"
+    );
+    const apps: any[] = Array.isArray(list?.data) ? list.data : [];
+    const ours = apps.some(
+      (a) => String(a?.whatsapp_business_api_data?.id ?? a?.id) === String(config.META_APP_ID)
+    );
+    if (!ours && apps.length === 0) {
+      throw new EmbeddedSignupError("Webhook subscription did not register for this WhatsApp account.");
+    }
+  } catch (err) {
+    // A verification read failure is non-fatal (some tokens can't re-read the
+    // list); the POST above already returned OK. Only rethrow our explicit error.
+    if (err instanceof EmbeddedSignupError && /did not register/.test(err.message)) throw err;
+  }
 }
 
 // Step 4 — register the phone number for Cloud API (idempotent-ish; ignore
-// "already registered" errors so re-connecting doesn't hard-fail).
+// "already registered" errors so re-connecting doesn't hard-fail). Registering
+// with a PIN also sets the number's two-step verification code, which BSPs do
+// so the number stays under programmatic control.
 async function registerPhoneNumber(phoneNumberId: string, token: string): Promise<void> {
   try {
     await graphFetch(
@@ -128,13 +153,37 @@ async function registerPhoneNumber(phoneNumberId: string, token: string): Promis
       "Register phone number"
     );
   } catch (err) {
-    // If it's already registered, Meta returns an error we can safely ignore.
     const detail = (err as EmbeddedSignupError).detail as any;
     const sub = detail?.error?.error_subcode;
     const msg = String((err as Error).message || "");
+    // 2388004 = already registered. Re-connecting an existing number is normal
+    // and should not hard-fail the flow.
     const alreadyRegistered = sub === 2388004 || /already/i.test(msg);
-    if (!alreadyRegistered) throw err;
+    if (alreadyRegistered) return;
+    // Anything else (e.g. wrong PIN on a number with 2FA already set) is a real
+    // failure the tenant needs to know about.
+    throw err;
   }
+}
+
+// Read the phone number's current platform + verification status. Used both at
+// connect time and by the periodic health check so the dashboard can show a
+// live "number status" like Gupshup/Wati do.
+export async function getPhoneStatus(
+  phoneNumberId: string,
+  token: string
+): Promise<{ status?: string; nameStatus?: string; quality?: string; displayPhoneNumber?: string }> {
+  const data = await graphFetch(
+    `${GRAPH()}/${phoneNumberId}?fields=display_phone_number,verified_name,code_verification_status,name_status,quality_rating,platform_type`,
+    { headers: { Authorization: `Bearer ${token}` } },
+    "Fetch phone status"
+  );
+  return {
+    status: data?.code_verification_status ?? data?.platform_type,
+    nameStatus: data?.name_status,
+    quality: data?.quality_rating,
+    displayPhoneNumber: data?.display_phone_number,
+  };
 }
 
 // Orchestrates the full flow and persists the result. Returns the raw Connection.
@@ -170,4 +219,76 @@ export async function completeEmbeddedSignup(
     appSecret: config.META_APP_SECRET,
     status: "CONNECTED",
   });
+}
+
+// ---------------------------------------------------------------------------
+// Connection health — the "live status" a BSP dashboard shows (Gupshup/Wati).
+//
+// Reads the number's current quality rating, code-verification status and
+// display-name status from Meta using the stored token, caches the result on
+// the Connection row, and gracefully falls back to the last-known cached
+// values when a live fetch fails (expired token, transient Graph error, etc).
+// Never returns secrets.
+// ---------------------------------------------------------------------------
+
+export interface ConnectionHealth {
+  connected: boolean;
+  status: string;               // our ConnectionStatus (CONNECTED / DISCONNECTED / ERROR)
+  phoneNumber: string | null;
+  businessName: string | null;
+  qualityRating: string | null;        // GREEN / YELLOW / RED
+  codeVerificationStatus: string | null; // VERIFIED / NOT_VERIFIED / EXPIRED
+  nameStatus: string | null;             // APPROVED / PENDING_REVIEW / DECLINED
+  checkedAt: string | null;              // ISO timestamp of the values above
+  live: boolean;                          // true if freshly fetched from Meta this call
+  error: string | null;                   // set when the live fetch failed (cached shown)
+}
+
+function healthFromRow(c: Connection, live: boolean, error: string | null): ConnectionHealth {
+  return {
+    connected: c.status === "CONNECTED",
+    status: c.status,
+    phoneNumber: c.phoneNumber,
+    businessName: c.businessName,
+    qualityRating: c.qualityRating,
+    codeVerificationStatus: c.codeVerificationStatus,
+    nameStatus: c.nameStatus,
+    checkedAt: c.healthCheckedAt ? c.healthCheckedAt.toISOString() : null,
+    live,
+    error,
+  };
+}
+
+// Fetch (and cache) the live health for a chatbot's connection. Returns null
+// only when there is no connection row at all.
+export async function getConnectionHealth(chatbotId: string): Promise<ConnectionHealth | null> {
+  const conn = await getConnection(chatbotId);
+  if (!conn) return null;
+
+  // No token / not connected → nothing to poll; return the stored snapshot.
+  if (!conn.accessToken || !conn.phoneNumberId || conn.status !== "CONNECTED") {
+    return healthFromRow(conn, false, null);
+  }
+
+  try {
+    const s = await getPhoneStatus(conn.phoneNumberId, conn.accessToken);
+    // Persist the fresh values so the last-known snapshot survives token/network
+    // failures on a later call.
+    const updated = await prisma.connection.update({
+      where: { chatbotId },
+      data: {
+        qualityRating: s.quality ?? conn.qualityRating,
+        codeVerificationStatus: s.status ?? conn.codeVerificationStatus,
+        nameStatus: s.nameStatus ?? conn.nameStatus,
+        phoneNumber: s.displayPhoneNumber ?? conn.phoneNumber,
+        healthCheckedAt: new Date(),
+      },
+    });
+    return healthFromRow(updated, true, null);
+  } catch (err) {
+    // Live fetch failed — surface the cached values with an error note so the
+    // dashboard can show "last checked …" instead of going blank.
+    const msg = err instanceof EmbeddedSignupError ? err.message : "Couldn't reach Meta for a live status.";
+    return healthFromRow(conn, false, msg);
+  }
 }

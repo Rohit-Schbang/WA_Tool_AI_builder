@@ -23,8 +23,10 @@ Available node types and their config fields (use ONLY these):
     buttons?: [{ id: string, label: string, kind: "cta"|"url", url?: string }] }
     (buttons are optional; kind "cta" branches to another node via an edge whose sourceHandle = the button id; kind "url" opens a link)
 - ASK_INPUT: ask a question and store the answer. config: { text: string, variable: string,
-    footer?: string, validationType?: "none"|"phone"|"email"|"url"|"number"|"alphanumeric"|"custom",
+    footer?: string, expectedType?: "text"|"image"|"audio"|"document"|"video"|"location"|"any",
+    validationType?: "none"|"phone"|"email"|"url"|"number"|"alphanumeric"|"custom",
     regex?: string, retryLimit?: number, failureMessage?: string }
+    (expectedType defaults to "text"; set it to a media type to require the user to send a photo/audio/document/video/location. validationType/regex apply ONLY when expectedType is "text".)
 - LIST: prompt with a list of options. config: { text: string, buttonText?: string,
     rows: [{ id: string, label: string }] } (each row branches via an edge whose sourceHandle = the row id)
 - CONDITION: branch on a variable. config: { field: string, value: string }
@@ -32,8 +34,11 @@ Available node types and their config fields (use ONLY these):
 - AI_RESPONSE: generate a reply with AI. config: { prompt: string, variable?: string, sendReply?: boolean, fallbackText?: string }
 - SET_VARIABLE: set a variable. config: { variable: string, value: string }
 - TRANSFORM: run a JS expression, store result. config: { expression: string (use vars.x), variable: string }
-- API_REQUEST: call an HTTP API. config: { method: "GET"|"POST"|"PUT"|"PATCH"|"DELETE", url: string,
-    headers?: [{key,value}], query?: [{key,value}], body?: string, responseMap?: [{path,variable}], statusVariable?: string, timeoutMs?: number }
+- API_REQUEST: call an HTTP API via a saved GLOBAL API CONFIG (never inline). config: { apiConfig: string (the config NAME),
+    endpointId?: string (an endpoint id within that config — REQUIRED if the config lists endpoints),
+    query?: [{key,value}], responseMap?: [{path,variable}], statusVariable?: string, timeoutMs?: number }
+    Do NOT include url/method/headers/body — the method, URL and body come from the chosen config/endpoint.
+    Only use an apiConfig NAME that appears in the "Available global API configs" list below. If no configs are available, do NOT use an API_REQUEST node.
     Has TWO outgoing edges: sourceHandle "true" (2xx success) and sourceHandle "else" (failure).
 - WAIT: pause. config: { seconds: number }
 
@@ -50,7 +55,7 @@ Rules:
 3. Every non-START node must have at least one incoming edge (be reachable from START).
 4. Never create an edge whose target is the START node.
 5. CONDITION nodes must have exactly two outgoing edges with sourceHandle "true" and "else".
-6. API_REQUEST nodes must have two outgoing edges with sourceHandle "true" and "else".
+6. API_REQUEST nodes must have two outgoing edges with sourceHandle "true" and "else". They MUST reference an existing global API config by name via config.apiConfig (and config.endpointId if that config has endpoints). NEVER put url/method/headers/body on an API_REQUEST node. If no global API configs are available, do not create any API_REQUEST node.
 7. For SEND_MESSAGE cta buttons and LIST rows, the outgoing edge's sourceHandle must equal that button/row id.
 8. Use short, unique node ids like "n1","n2". Give each node a config.name (a short human label).
 9. Declare any {{variables}} you reference in the "variables" array.
@@ -61,6 +66,24 @@ export interface GeneratedDefinition {
   variables: { name: string; type: string; default: string }[];
   nodes: { id: string; nodeType: string; seq: number; position: { x: number; y: number }; config: any }[];
   edges: { id: string; source: string; target: string; sourceHandle: string | null }[];
+}
+
+// Describe the global API configs the builder currently has so the AI can
+// reference them by name (and pick a valid endpoint) instead of inventing an
+// inline URL. Returns "" when there are none (the AI is told not to use API nodes).
+function apiConfigsBlock(apiConfigs?: any[]): string {
+  const list = Array.isArray(apiConfigs) ? apiConfigs.filter((c) => c?.name) : [];
+  if (!list.length) {
+    return `\nAvailable global API configs: NONE. Do not create any API_REQUEST node.\n`;
+  }
+  const lines = list.map((c) => {
+    const eps = Array.isArray(c.endpoints) ? c.endpoints : [];
+    const epStr = eps.length
+      ? eps.map((e: any) => `endpointId "${e.id}" (${(e.method || "GET")} ${e.path || ""}${e.name ? ` — ${e.name}` : ""})`).join("; ")
+      : "no endpoints (calls base URL directly)";
+    return `- apiConfig "${c.name}" (baseUrl: ${c.baseUrl || "n/a"}): ${epStr}`;
+  });
+  return `\nAvailable global API configs (use ONLY these for API_REQUEST nodes):\n${lines.join("\n")}\n`;
 }
 
 function buildPrompt(description: string, drawioXml?: string, fixErrors?: string[]): string {
@@ -172,11 +195,12 @@ the stage(s) being added, edited, or removed and where they sit in the flow:\n""
 }
 
 // STEP 1 — PLAN: outline the journey as ordered stages (no workflow JSON yet).
-async function planJourney(description: string, drawioXml?: string, edit?: EditContext): Promise<PlanStage[]> {
+async function planJourney(description: string, drawioXml?: string, edit?: EditContext, apiConfigs?: any[]): Promise<PlanStage[]> {
   let p = `You are an expert WhatsApp chatbot flow architect. Before building anything,
 PLAN the journey as an ordered list of stages (like a coding agent writing TODOs).
 
 ${NODE_CATALOG}
+${apiConfigsBlock(apiConfigs)}
 
 Think step by step about the goal and produce the sequence of stages.
 For each stage give: the step number, a short title, the single nodeType it maps
@@ -197,13 +221,14 @@ Start the plan with the START node. Be complete but concise.\n`;
 }
 
 // STEP 2 — BUILD (create): turn the approved plan into strict workflow JSON.
-async function buildFromPlan(description: string, plan: PlanStage[], drawioXml?: string, fixErrors?: string[]): Promise<GeneratedDefinition> {
+async function buildFromPlan(description: string, plan: PlanStage[], drawioXml?: string, fixErrors?: string[], apiConfigs?: any[]): Promise<GeneratedDefinition> {
   let p = `You are an expert WhatsApp chatbot flow builder. Build the workflow JSON by
 following the APPROVED PLAN below EXACTLY — one node per stage, wired in order,
 with the branches each stage describes. Do not invent extra stages or drop any.
 
 ${NODE_CATALOG}
 ${RULES}
+${apiConfigsBlock(apiConfigs)}
 
 APPROVED PLAN (follow it stage by stage):
 ${JSON.stringify(plan, null, 2)}
@@ -220,7 +245,7 @@ Original user description (for wording of messages etc.):
 // EDIT BUILD — apply the approved change-plan to the EXISTING flow as a PATCH,
 // preserving the ids of nodes that stay (so the frontend keeps their positions
 // and only new nodes are placed). Cheaper than full regeneration.
-async function patchBuild(edit: EditContext, plan: PlanStage[], fixErrors?: string[]): Promise<GeneratedDefinition> {
+async function patchBuild(edit: EditContext, plan: PlanStage[], fixErrors?: string[], apiConfigs?: any[]): Promise<GeneratedDefinition> {
   const anchor = edit.anchorNodeId
     ? `\nInsert/act relative to the node with id "${edit.anchorNodeId}". If adding a node "after" it, rewire: the edge that currently leaves "${edit.anchorNodeId}" must now point to the NEW node, and the new node connects to that edge's old target.\n`
     : "";
@@ -229,6 +254,7 @@ below to the current workflow and return the COMPLETE updated workflow as JSON.
 
 ${NODE_CATALOG}
 ${RULES}
+${apiConfigsBlock(apiConfigs)}
 
 CRITICAL PATCH RULES:
 - PRESERVE the existing "id" of every node you keep. Only assign NEW ids
@@ -278,8 +304,8 @@ ${JSON.stringify({ variables: def.variables, nodes: def.nodes.map(n => ({ id: n.
 // Public: STEP 1 only — produce the plan for the user to review/approve.
 // When `edit` is given, the plan is for a REGENERATION of the existing journey
 // with the requested change folded in (create-new-from-original, not a patch).
-export async function planOnly(description: string, drawioXml?: string, edit?: EditContext): Promise<PlanStage[]> {
-  const plan = await planJourney(description, drawioXml, edit);
+export async function planOnly(description: string, drawioXml?: string, edit?: EditContext, apiConfigs?: any[]): Promise<PlanStage[]> {
+  const plan = await planJourney(description, drawioXml, edit, apiConfigs);
   // number the stages defensively
   return plan.map((s, i) => ({
     step: Number(s.step) || i + 1,
@@ -293,13 +319,14 @@ export async function generateJourney(
   description: string,
   drawioXml?: string,
   approvedPlan?: PlanStage[],
-  edit?: EditContext
+  edit?: EditContext,
+  apiConfigs?: any[]
 ): Promise<GenerateResult> {
   // 1) PLAN — reuse the user-approved plan if provided, else generate one.
   let plan: PlanStage[] = Array.isArray(approvedPlan) && approvedPlan.length ? approvedPlan : [];
   if (!plan.length) {
     try {
-      plan = await planJourney(description, drawioXml, edit);
+      plan = await planJourney(description, drawioXml, edit, apiConfigs);
     } catch {
       plan = []; // planning is best-effort; build can still proceed
     }
@@ -309,9 +336,9 @@ export async function generateJourney(
   //    For CREATE, build the whole flow from the plan then QC it.
   let def: GeneratedDefinition;
   if (edit) {
-    def = await patchBuild(edit, plan);
+    def = await patchBuild(edit, plan, undefined, apiConfigs);
   } else {
-    def = await buildFromPlan(description, plan, drawioXml);
+    def = await buildFromPlan(description, plan, drawioXml, undefined, apiConfigs);
     // QC self-review pass (create only; best-effort).
     try {
       const reviewed = await qcReview(plan, def);
@@ -326,8 +353,8 @@ export async function generateJourney(
   if (!result.valid) {
     try {
       const def2 = edit
-        ? await patchBuild(edit, plan, result.errors.map((e) => e.message))
-        : await buildFromPlan(description, plan, drawioXml, result.errors.map((e) => e.message));
+        ? await patchBuild(edit, plan, result.errors.map((e) => e.message), apiConfigs)
+        : await buildFromPlan(description, plan, drawioXml, result.errors.map((e) => e.message), apiConfigs);
       const result2 = validateWorkflow({ nodes: def2.nodes, edges: def2.edges } as any);
       if (result2.valid) return { ok: true, definition: def2, plan };
       return { ok: false, definition: def2, plan, errors: result2.errors.map((e) => e.message) };

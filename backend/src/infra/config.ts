@@ -31,6 +31,7 @@ const envSchema = z.object({
   META_APP_ID: z.string().optional(),
   META_APP_SECRET: z.string().optional(),
   META_CONFIG_ID: z.string().optional(),          // Facebook Login for Business Configuration ID
+  META_SOLUTION_ID: z.string().optional(),         // Tech Provider "solution" id — attributes onboarded WABAs to us (BSP model)
   META_GRAPH_VERSION: z.string().default("v22.0"),
   META_REDIRECT_URI: z.string().optional(),        // must match a registered OAuth redirect URI
   WHATSAPP_REGISTER_PIN: z.string().default("000000"), // 6-digit PIN used when registering the phone number

@@ -108,6 +108,14 @@ model Connection {
   wabaId         String?           // WhatsApp Business Account ID
   status         ConnectionStatus @default(DISCONNECTED)
 
+  // Number health — cached from Meta so the dashboard can show a live-ish
+  // status (quality/verification/display-name) like Gupshup/Wati, and still
+  // display the last-known values when a live fetch fails.
+  qualityRating          String?   // GREEN / YELLOW / RED (messaging quality)
+  codeVerificationStatus String?   // VERIFIED / NOT_VERIFIED / EXPIRED
+  nameStatus             String?   // APPROVED / PENDING_REVIEW / DECLINED etc.
+  healthCheckedAt        DateTime? // when the health fields were last refreshed
+
   // Secret fields — backend only, never returned to the client
   accessToken    String?
   appId          String?

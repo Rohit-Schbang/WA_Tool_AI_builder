@@ -7,6 +7,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { Sidebar } from "@/app/components/Sidebar";
 import { EmbeddedSignup } from "./EmbeddedSignup";
+import { ConnectionHealth } from "./ConnectionHealth";
 
 // Shape of the safe connection returned from the backend (no secret values).
 interface SafeConnection {
@@ -38,6 +39,9 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [copied, setCopied] = useState<string | null>(null);
+  // Advanced manual setup is collapsed by default so the primary flow is the
+  // single "Connect to Meta" button (Google-auth style).
+  const [showManual, setShowManual] = useState(false);
 
   // Real webhook endpoint derived from the configured API base URL.
   const webhookUrl = useMemo(() => {
@@ -162,7 +166,7 @@ export default function SettingsPage() {
                 </span>
               </div>
               <p className="text-sm text-slate-500">
-                Configure Meta Cloud API credentials and the webhook endpoint for this chatbot.
+                Connect to Meta to link your WhatsApp Business account, or configure credentials manually.
               </p>
             </div>
           </div>
@@ -173,20 +177,30 @@ export default function SettingsPage() {
             </div>
           ) : (
             <div className="flex flex-col gap-6">
-            {/* One-click Meta Embedded Signup (auto-provisions credentials) */}
+            {/* Primary flow — one-click "Connect to Meta" (auto-provisions credentials) */}
             <EmbeddedSignup chatbotId={chatbotId} connected={connected} onConnected={loadConnection} />
 
-            {/* Manual setup — fallback / advanced. */}
+            {/* Live number health dashboard (only renders once connected) */}
+            <ConnectionHealth chatbotId={chatbotId} />
+
+            {/* Advanced setup — collapsible manual credential entry (fallback). */}
             <div>
-              <div className="flex items-center gap-2 mb-3">
+              <div className="flex items-center gap-2">
                 <span className="h-px flex-1 bg-slate-200" />
-                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                  Or configure manually
-                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowManual((v) => !v)}
+                  aria-expanded={showManual}
+                  className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white border border-slate-200 text-[11px] font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-800 hover:border-slate-300 transition"
+                >
+                  <i className={`ph-bold ph-caret-${showManual ? "up" : "down"} text-[12px]`} aria-hidden="true"></i>
+                  {showManual ? "Hide advanced setup" : "Advanced: configure manually"}
+                </button>
                 <span className="h-px flex-1 bg-slate-200" />
               </div>
             </div>
 
+            {showManual && (
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
               {/* ---------------- Main configuration form (8 cols) ---------------- */}
               <form onSubmit={handleSave} className="lg:col-span-8 flex flex-col gap-6">
@@ -458,6 +472,7 @@ export default function SettingsPage() {
                 </div>
               </div>
             </div>
+            )}
             </div>
           )}
         </main>

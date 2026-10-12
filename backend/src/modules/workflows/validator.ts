@@ -12,9 +12,15 @@ interface WorkflowEdge {
     sourceHandle: string | null
 }
 
+interface ApiEndpointDef { id: string; name?: string; method?: string; path?: string; body?: string }
+interface ApiConfigDef { name: string; baseUrl?: string; headers?: { key: string; value: string }[]; endpoints?: ApiEndpointDef[] }
+
 interface WorkflowDefinition {
     nodes: WorkflowNode[];
-    edges: WorkflowEdge[]
+    edges: WorkflowEdge[];
+    // Present at publish time (full definition). Absent when the AI generator
+    // validates just nodes+edges — the API_REQUEST rule degrades gracefully.
+    apiConfigs?: ApiConfigDef[];
 }
 
 // A single validation problem. `nodeId` (when present) lets the frontend
@@ -135,8 +141,21 @@ export function validateWorkflow(def: WorkflowDefinition): ValidationResult {
         if (node.nodeType === "TRANSFORM" && !config.variable) {
             push(`"${name}" is missing an output variable.`, node.id)
         }
-        if (node.nodeType === "API_REQUEST" && !config.url) {
-            push(`"${name}" is missing a URL.`, node.id)
+        if (node.nodeType === "API_REQUEST") {
+            // Global-config-only policy: the request must reference a saved
+            // global API config by name (no inline URLs allowed).
+            if (!config.apiConfig) {
+                push(`"${name}" must use a saved global API config (select one in the node).`, node.id)
+            } else if (Array.isArray(def.apiConfigs)) {
+                // Full definition available (publish time) — resolve the reference.
+                const gc = def.apiConfigs.find((c) => c?.name === config.apiConfig)
+                if (!gc) {
+                    push(`"${name}" references an API config "${config.apiConfig}" that no longer exists.`, node.id)
+                } else if ((gc.endpoints?.length ?? 0) > 0) {
+                    const ep = gc.endpoints!.find((e) => e.id === config.endpointId)
+                    if (!ep) push(`"${name}" must select an endpoint from the "${gc.name}" API config.`, node.id)
+                }
+            }
         }
     }
 

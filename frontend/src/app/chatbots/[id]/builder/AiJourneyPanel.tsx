@@ -125,7 +125,7 @@ export function AiJourneyPanel({
             currentDefinition: getCurrentDefinition(),
             anchorNodeId: anchorNodeId || undefined,
           }
-        : { description, drawioXml: drawioXml || undefined };
+        : { description, drawioXml: drawioXml || undefined, apiConfigs: getCurrentDefinition()?.apiConfigs };
       const res = await api.post(`/api/chatbots/${chatbotId}/workflow/generate-plan`, body);
       const stages: PlanStage[] = res.data?.plan ?? [];
       if (!stages.length) {
@@ -159,7 +159,7 @@ export function AiJourneyPanel({
             anchorNodeId: anchorNodeId || undefined,
             plan,
           }
-        : { description, drawioXml: drawioXml || undefined, plan };
+        : { description, drawioXml: drawioXml || undefined, plan, apiConfigs: getCurrentDefinition()?.apiConfigs };
       const res = await api.post(`/api/chatbots/${chatbotId}/workflow/generate`, body);
       const { definition, warnings: warns } = res.data;
       if (!definition) {

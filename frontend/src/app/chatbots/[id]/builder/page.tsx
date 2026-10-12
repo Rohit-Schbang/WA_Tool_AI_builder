@@ -2072,10 +2072,43 @@ function BuilderInner() {
                     variables={variables}
                     onCreateVariable={ensureVariable}
                   />
-                  <p className="text-[11px] text-slate-400">Stores whatever text or selection the user sends in reply.</p>
+                  <p className="text-[11px] text-slate-400">Stores whatever the user sends in reply — text, a selection, or an attachment.</p>
                 </div>
 
-                {/* Validation */}
+                {/* Expected answer type — text (default) or a media/location
+                    attachment. Media types skip text validation. */}
+                <div className="space-y-1.5">
+                  <span className="block font-semibold text-slate-700">Expected answer type</span>
+                  <div className="relative">
+                    <select
+                      className="w-full appearance-none px-3 py-2 text-xs rounded-lg border border-slate-300 bg-white text-slate-700 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500 font-medium cursor-pointer pr-8"
+                      value={selectedNode.data.config.expectedType ?? "text"}
+                      onChange={(e) => updateConfig("expectedType", e.target.value)}
+                    >
+                      <option value="text">Text</option>
+                      <option value="image">Photo / Image</option>
+                      <option value="audio">Audio</option>
+                      <option value="document">Document / File</option>
+                      <option value="video">Video</option>
+                      <option value="location">Location</option>
+                      <option value="any">Any (text or attachment)</option>
+                    </select>
+                    <i className="ph-bold ph-caret-down absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 text-[10px] pointer-events-none" />
+                  </div>
+                  {(selectedNode.data.config.expectedType ?? "text") !== "text" &&
+                    (selectedNode.data.config.expectedType ?? "text") !== "any" && (
+                      <p className="text-[11px] text-slate-400">
+                        The bot will keep asking until the user sends {" "}
+                        {({ image: "a photo", audio: "an audio message", document: "a document", video: "a video", location: "a location" } as Record<string, string>)[selectedNode.data.config.expectedType] ?? "the attachment"}.
+                        The media reference (and caption) is saved to the variable.
+                      </p>
+                    )}
+                </div>
+
+                {/* Validation — text questions only. Media/location answers
+                    can't be regex-validated. */}
+                {((selectedNode.data.config.expectedType ?? "text") === "text") && (
+                <>
                 <div className="space-y-1.5">
                   <span className="block font-semibold text-slate-700">Validation type</span>
                   <div className="relative">
@@ -2139,6 +2172,43 @@ function BuilderInner() {
                           variables={variables}
                           onCreateVariable={ensureVariable}
                           placeholder="That doesn't look valid. Please try again."
+                        />
+                      </div>
+                    </>
+                  )}
+                </>
+                )}
+
+                {/* Retry + wrong-type message for MEDIA/location questions
+                    (text questions configure this under Validation above). */}
+                {(selectedNode.data.config.expectedType ?? "text") !== "text" &&
+                  (selectedNode.data.config.expectedType ?? "text") !== "any" && (
+                    <>
+                      <div className="space-y-1.5">
+                        <span className="block font-semibold text-slate-700">Retry limit (max 5)</span>
+                        <input
+                          type="number"
+                          min={1}
+                          max={5}
+                          className="w-24 px-3 py-2 text-xs rounded-lg border border-slate-300 bg-white focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500 text-slate-800 font-medium transition-colors"
+                          value={selectedNode.data.config.retryLimit ?? 3}
+                          onChange={(e) => {
+                            const n = Math.max(1, Math.min(5, Number(e.target.value) || 1));
+                            updateConfig("retryLimit", n);
+                          }}
+                        />
+                        <p className="text-[11px] text-slate-400">
+                          After this many wrong-type replies, the message below is shown and the flow continues.
+                        </p>
+                      </div>
+                      <div className="space-y-1.5">
+                        <span className="block font-semibold text-slate-700">Wrong-type / failure message</span>
+                        <VariableTextInput
+                          value={selectedNode.data.config.failureMessage ?? ""}
+                          onChange={(v) => updateConfig("failureMessage", v)}
+                          variables={variables}
+                          onCreateVariable={ensureVariable}
+                          placeholder="Please send the requested attachment."
                         />
                       </div>
                     </>
@@ -2607,148 +2677,112 @@ function BuilderInner() {
 
             {selectedNode.data.nodeType === "API_REQUEST" && (
               <>
-                <label className="form-control">
-                  <span className="label-text">Use global API config (optional)</span>
-                  <select
-                    className="select select-bordered select-sm"
-                    value={selectedNode.data.config.apiConfig ?? ""}
-                    onChange={(e) => { updateConfig("apiConfig", e.target.value); updateConfig("endpointId", ""); }}
-                  >
-                    <option value="">None</option>
-                    {apiConfigs.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
-                  </select>
-                </label>
-                {/* Endpoint picker — appears when the chosen config has endpoints.
-                    Selecting one auto-fills method / URL (path) / body. */}
-                {(() => {
-                  const cfg = apiConfigs.find((c) => c.name === selectedNode.data.config.apiConfig);
-                  const eps = cfg?.endpoints ?? [];
-                  if (eps.length === 0) return null;
-                  return (
+                {/* Global-config-only: every API request must go through a
+                    saved global API config. Inline URL/method/headers/body are
+                    no longer editable here — define them once in API Configs. */}
+                {apiConfigs.length === 0 ? (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 flex flex-col gap-2">
+                    <div className="flex items-center gap-1.5 font-semibold">
+                      <i className="ph-bold ph-plug" /> No global API configs yet
+                    </div>
+                    <p className="leading-relaxed">
+                      API requests must use a saved global API config. Create one in{" "}
+                      <span className="font-semibold">API Configs</span> (top toolbar), then select it here.
+                    </p>
+                  </div>
+                ) : (
+                  <>
                     <label className="form-control">
-                      <span className="label-text">Endpoint (from config)</span>
+                      <span className="label-text">Global API config <span className="text-error">*</span></span>
                       <select
                         className="select select-bordered select-sm"
-                        value={selectedNode.data.config.endpointId ?? ""}
-                        onChange={(e) => {
-                          const ep = eps.find((x) => x.id === e.target.value);
-                          updateConfig("endpointId", e.target.value);
-                          if (ep) {
-                            updateConfig("method", ep.method);
-                            updateConfig("url", ep.path);
-                            if (ep.body) updateConfig("body", ep.body);
-                          }
-                        }}
+                        value={selectedNode.data.config.apiConfig ?? ""}
+                        onChange={(e) => { updateConfig("apiConfig", e.target.value); updateConfig("endpointId", ""); }}
                       >
-                        <option value="">Custom (set below)</option>
-                        {eps.map((ep) => (
-                          <option key={ep.id} value={ep.id}>{ep.method} — {ep.name || ep.path}</option>
-                        ))}
+                        <option value="">Select a config…</option>
+                        {apiConfigs.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
                       </select>
                     </label>
-                  );
-                })()}
-                <div className="flex gap-2">
-                  <label className="form-control w-28">
-                    <span className="label-text">Method</span>
-                    <select
-                      className="select select-bordered select-sm"
-                      value={selectedNode.data.config.method ?? "GET"}
-                      onChange={(e) => updateConfig("method", e.target.value)}
-                    >
-                      {["GET", "POST", "PUT", "PATCH", "DELETE"].map((m) => <option key={m} value={m}>{m}</option>)}
-                    </select>
-                  </label>
-                  <label className="form-control flex-1">
-                    <span className="label-text">Timeout (ms)</span>
-                    <input
-                      type="number"
-                      className="input input-bordered input-sm"
-                      placeholder="10000"
-                      value={selectedNode.data.config.timeoutMs ?? ""}
-                      onChange={(e) => updateConfig("timeoutMs", e.target.value)}
-                    />
-                  </label>
-                </div>
-                <label className="form-control">
-                  <span className="label-text">URL (supports {"{{var}}"})</span>
-                  <VariableTextInput
-                    value={selectedNode.data.config.url ?? ""}
-                    onChange={(v) => updateConfig("url", v)}
-                    variables={variables}
-                    onCreateVariable={ensureVariable}
-                    singleLine
-                    hideFormatting
-                    placeholder="https://api.example.com/users/{{id}}"
-                  />
-                </label>
 
-                {/* Headers — key is plain, value supports variables */}
-                <div className="text-sm font-medium mt-1">Headers</div>
-                {(selectedNode.data.config.headers ?? []).map((hdr: any, idx: number) => (
-                  <div key={idx} className="flex gap-1 items-start">
-                    <input className="input input-bordered input-xs flex-1 mt-0.5" placeholder="key" value={hdr.key ?? ""}
-                      onChange={(e) => updateKeyValList("headers", idx, "key", e.target.value)} />
-                    <div className="flex-1">
-                      <VariableTextInput
-                        value={hdr.value ?? ""}
-                        onChange={(v) => updateKeyValList("headers", idx, "value", v)}
-                        variables={variables}
-                        onCreateVariable={ensureVariable}
-                        singleLine
-                        hideFormatting
-                        placeholder="value"
-                      />
-                    </div>
-                    <button onClick={() => removeKeyValList("headers", idx)} className="btn btn-xs btn-ghost text-error mt-0.5">✕</button>
-                  </div>
-                ))}
-                <button onClick={() => addKeyValList("headers")} className="btn btn-xs btn-outline">+ Header</button>
-
-                {/* Query params — key is plain, value supports variables */}
-                <div className="text-sm font-medium mt-1">Query params</div>
-                {(selectedNode.data.config.query ?? []).map((q: any, idx: number) => (
-                  <div key={idx} className="flex gap-1 items-start">
-                    <input className="input input-bordered input-xs flex-1 mt-0.5" placeholder="key" value={q.key ?? ""}
-                      onChange={(e) => updateKeyValList("query", idx, "key", e.target.value)} />
-                    <div className="flex-1">
-                      <VariableTextInput
-                        value={q.value ?? ""}
-                        onChange={(v) => updateKeyValList("query", idx, "value", v)}
-                        variables={variables}
-                        onCreateVariable={ensureVariable}
-                        singleLine
-                        hideFormatting
-                        placeholder="value"
-                      />
-                    </div>
-                    <button onClick={() => removeKeyValList("query", idx)} className="btn btn-xs btn-ghost text-error mt-0.5">✕</button>
-                  </div>
-                ))}
-                <button onClick={() => addKeyValList("query")} className="btn btn-xs btn-outline">+ Query param</button>
-
-                {/* Body */}
-                {["POST", "PUT", "PATCH"].includes(selectedNode.data.config.method ?? "GET") && (
-                  <label className="form-control">
-                    <span className="label-text">Request body (JSON, supports {"{{var}}"})</span>
-                    <VariableTextInput
-                      value={selectedNode.data.config.body ?? ""}
-                      onChange={(v) => updateConfig("body", v)}
-                      variables={variables}
-                      onCreateVariable={ensureVariable}
-                      rows={3}
-                      hideFormatting
-                      placeholder={'{ "name": "{{name}}" }'}
-                    />
+                    {/* Endpoint picker — required when the chosen config defines endpoints. */}
                     {(() => {
-                      const check = checkBodyJson(selectedNode.data.config.body ?? "");
-                      return check.ok ? null : (
-                        <span className="text-[11px] text-error mt-1 flex items-center gap-1">
-                          ⚠️ {check.hint}
-                        </span>
+                      const cfg = apiConfigs.find((c) => c.name === selectedNode.data.config.apiConfig);
+                      if (!cfg) return null;
+                      const eps = cfg.endpoints ?? [];
+                      if (eps.length === 0) {
+                        return (
+                          <p className="text-[11px] text-slate-400">
+                            This config calls its base URL directly ({cfg.baseUrl || "no base URL set"}).
+                          </p>
+                        );
+                      }
+                      return (
+                        <label className="form-control">
+                          <span className="label-text">Endpoint <span className="text-error">*</span></span>
+                          <select
+                            className="select select-bordered select-sm"
+                            value={selectedNode.data.config.endpointId ?? ""}
+                            onChange={(e) => updateConfig("endpointId", e.target.value)}
+                          >
+                            <option value="">Select an endpoint…</option>
+                            {eps.map((ep) => (
+                              <option key={ep.id} value={ep.id}>{ep.method} — {ep.name || ep.path}</option>
+                            ))}
+                          </select>
+                        </label>
                       );
                     })()}
-                  </label>
+
+                    {/* Read-only preview of the resolved call (method + URL). */}
+                    {(() => {
+                      const cfg = apiConfigs.find((c) => c.name === selectedNode.data.config.apiConfig);
+                      if (!cfg) return null;
+                      const ep = (cfg.endpoints ?? []).find((e) => e.id === selectedNode.data.config.endpointId);
+                      const base = (cfg.baseUrl || "").replace(/\/$/, "");
+                      const path = ep?.path ?? "";
+                      const url = /^https?:\/\//i.test(path) ? path : `${base}/${path.replace(/^\//, "")}`;
+                      return (
+                        <div className="rounded-lg border border-slate-200 bg-slate-50 p-2.5 text-[11px] font-mono text-slate-600 break-all">
+                          <span className="font-semibold text-teal-700">{(ep?.method || "GET").toUpperCase()}</span>{" "}
+                          {url || "—"}
+                        </div>
+                      );
+                    })()}
+
+                    <label className="form-control">
+                      <span className="label-text">Timeout (ms)</span>
+                      <input
+                        type="number"
+                        className="input input-bordered input-sm"
+                        placeholder="10000"
+                        value={selectedNode.data.config.timeoutMs ?? ""}
+                        onChange={(e) => updateConfig("timeoutMs", e.target.value)}
+                      />
+                    </label>
+
+                    {/* Per-call query params — these parameterise the call, they
+                        don't define a new API, so they stay editable. */}
+                    <div className="text-sm font-medium mt-1">Query params</div>
+                    {(selectedNode.data.config.query ?? []).map((q: any, idx: number) => (
+                      <div key={idx} className="flex gap-1 items-start">
+                        <input className="input input-bordered input-xs flex-1 mt-0.5" placeholder="key" value={q.key ?? ""}
+                          onChange={(e) => updateKeyValList("query", idx, "key", e.target.value)} />
+                        <div className="flex-1">
+                          <VariableTextInput
+                            value={q.value ?? ""}
+                            onChange={(v) => updateKeyValList("query", idx, "value", v)}
+                            variables={variables}
+                            onCreateVariable={ensureVariable}
+                            singleLine
+                            hideFormatting
+                            placeholder="value"
+                          />
+                        </div>
+                        <button onClick={() => removeKeyValList("query", idx)} className="btn btn-xs btn-ghost text-error mt-0.5">✕</button>
+                      </div>
+                    ))}
+                    <button onClick={() => addKeyValList("query")} className="btn btn-xs btn-outline">+ Query param</button>
+                  </>
                 )}
 
                 {/* Response mapping — path is plain, destination is a variable */}

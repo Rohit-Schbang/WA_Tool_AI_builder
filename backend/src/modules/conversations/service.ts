@@ -5,7 +5,7 @@
 
 import { prisma } from "../../infra/prisma.js";
 import { runEngine, RunResult } from "../runtime/engine.js";
-import { MessagingAdapter, WorkflowDefinition, ExecutionContext, WorkflowNode } from "../runtime/types.js";
+import { MessagingAdapter, WorkflowDefinition, ExecutionContext, WorkflowNode, InboundType, InboundMedia } from "../runtime/types.js";
 import { LoggingAdapter } from "../messaging/loggingAdapters.js";
 
 // #2 — build the initial variables map from the workflow's declared variables
@@ -56,7 +56,11 @@ export async function handleInboundMessage(
     // The web tester also passes { useDraft: true } so it runs the latest saved
     // draft (what the user sees on the canvas) instead of the last published
     // version, and works even when the bot isn't active yet.
-    opts: { bypassTrigger?: boolean; useDraft?: boolean } = {}
+    // `inbound` carries the message TYPE + media/location payload so a Question
+    // node can expect a specific input type (image/audio/document/…). It's
+    // optional: callers that only have text (e.g. the web tester) omit it and
+    // the message is treated as plain text, exactly as before.
+    opts: { bypassTrigger?: boolean; useDraft?: boolean; inbound?: { type: InboundType; media?: InboundMedia | null } } = {}
 ): Promise<{ status: string }> {
 
 
@@ -137,10 +141,15 @@ export async function handleInboundMessage(
         if (c?.name) apiConfigs[c.name] = c;
     }
 
+    const inboundType: InboundType = opts.inbound?.type ?? "text";
+    const inboundMedia: InboundMedia | null = opts.inbound?.media ?? null;
+
     const context: ExecutionContext = {
         userId: waUserId,
         variables,
         incomingText: text,
+        incomingType: inboundType,
+        incomingMedia: inboundMedia,
         messaging: loggingMessaging,
         apiConfigs,
     };
@@ -152,15 +161,17 @@ export async function handleInboundMessage(
         if (!startNode) return { status: "no_start_node" };
         startNodeId = startNode.id;
         context.incomingText = null;
+        context.incomingType = null;
+        context.incomingMedia = null;
     }
 
-    // Log the inbound message before running.
+    // Log the inbound message before running (record the real type + payload).
     await prisma.message.create({
         data: {
             conversationId: conversation.id,
             direction: "INBOUND",
-            messageType: "text",
-            content: { text },
+            messageType: inboundType,
+            content: (inboundMedia ? { text, media: inboundMedia } : { text }) as any,
         },
     });
 
