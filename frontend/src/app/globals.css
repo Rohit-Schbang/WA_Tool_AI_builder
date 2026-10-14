@@ -276,3 +276,176 @@ input:-webkit-autofill:active {
 body.rf-connecting .node-target-dot:hover {
   box-shadow: 0 0 0 4px rgba(20, 184, 166, 0.35) !important;
 }
+
+/* =====================================================================
+   DARK MODE
+   The app was authored with hardcoded light utility classes (bg-white,
+   text-slate-800, bg-[#f8f9ff], etc.). Rather than hand-editing hundreds
+   of class strings, we re-skin those common patterns globally when the
+   `dark` class is present on <html>. Brand teal/emerald accents are left
+   intact. Everything here is scoped under `html.dark` so light mode is
+   completely unaffected.
+   ===================================================================== */
+
+html.dark {
+  color-scheme: dark;
+}
+
+/* ---- Surfaces: page + card backgrounds --------------------------------- */
+/* Common hardcoded page/card backgrounds → dark slate equivalents. */
+html.dark .bg-white,
+html.dark .bg-white\/95,
+html.dark .bg-white\/90,
+html.dark .bg-white\/80 {
+  background-color: #1e293b !important; /* slate-800 — card surface */
+}
+html.dark .bg-slate-50,
+html.dark .bg-slate-100,
+html.dark .bg-\[\#f8f9ff\],
+html.dark .bg-\[\#f8fafc\],
+html.dark .bg-\[\#F0F2F5\] {
+  background-color: #0f172a !important; /* slate-900 — app background */
+}
+html.dark .bg-base-100 { background-color: #1e293b !important; }
+html.dark .bg-base-200 { background-color: #0f172a !important; }
+html.dark .bg-base-300 { background-color: #020617 !important; }
+
+/* Nested "muted" fills inside cards (e.g. slate-50 insets) read as slightly
+   lighter than the card so hierarchy is preserved. */
+html.dark .bg-white .bg-slate-50,
+html.dark .bg-white .bg-slate-100 {
+  background-color: #0f172a !important;
+}
+
+/* ---- Text ------------------------------------------------------------- */
+html.dark .text-slate-900,
+html.dark .text-slate-800,
+html.dark .text-slate-700,
+html.dark .text-gray-900,
+html.dark .text-gray-800 {
+  color: #e2e8f0 !important; /* slate-200 */
+}
+html.dark .text-slate-600,
+html.dark .text-slate-500,
+html.dark .text-gray-600,
+html.dark .text-gray-500 {
+  color: #94a3b8 !important; /* slate-400 */
+}
+html.dark .text-slate-400,
+html.dark .text-slate-300 {
+  color: #64748b !important; /* slate-500 */
+}
+
+/* ---- Borders ---------------------------------------------------------- */
+html.dark .border-slate-200,
+html.dark .border-slate-200\/90,
+html.dark .border-slate-200\/80,
+html.dark .border-slate-200\/70,
+html.dark .border-slate-200\/60,
+html.dark .border-slate-200\/50,
+html.dark .border-slate-300,
+html.dark .border-gray-200,
+html.dark .border-gray-300 {
+  border-color: #334155 !important; /* slate-700 */
+}
+html.dark .divide-slate-200 > * + * { border-color: #334155 !important; }
+
+/* ---- Material-3 token utilities used by the dashboard shell -----------
+   The chatbots/dashboard pages lean heavily on these tokens (including
+   opacity variants like bg-surface-container-low/70 and brand text tokens
+   text-primary / text-secondary). We remap backgrounds AND text so tiles
+   have readable contrast — this is what fixes the washed-out STATUS /
+   CREATED / ENVIRONMENT tiles and the near-invisible "Live" text. */
+html.dark .bg-surface,
+html.dark .bg-surface-bright,
+html.dark .bg-background { background-color: #0f172a !important; }
+html.dark .bg-surface-container-lowest { background-color: #1e293b !important; }
+html.dark [class*="bg-surface-container-low"] { background-color: #182138 !important; }
+html.dark [class*="bg-surface-container-high"] { background-color: #26334d !important; }
+html.dark .bg-surface-container { background-color: #1f2a43 !important; }
+
+html.dark .text-on-surface { color: #f1f5f9 !important; }
+html.dark .text-on-surface-variant { color: #a9b4c4 !important; }
+html.dark .text-on-background { color: #f1f5f9 !important; }
+/* Brand text tokens: brighten so they pop on dark tiles. */
+html.dark .text-primary { color: #5eead4 !important; }   /* teal -> bright teal */
+html.dark .text-secondary { color: #fdba74 !important; } /* orange -> soft amber */
+html.dark .text-tertiary { color: #7dd3fc !important; }  /* blue -> sky */
+/* Active sidebar/nav token pills. */
+html.dark .bg-primary-container { background-color: #0d9488 !important; }
+html.dark .text-on-primary-container { color: #ffffff !important; }
+
+/* ---- Form controls ---------------------------------------------------- */
+html.dark input,
+html.dark textarea,
+html.dark select,
+html.dark .input,
+html.dark .select,
+html.dark .textarea {
+  background-color: #0f172a !important;
+  color: #e2e8f0 !important;
+  border-color: #334155 !important;
+}
+html.dark input::placeholder,
+html.dark textarea::placeholder {
+  color: #64748b !important;
+}
+/* Autofill in dark mode (override the light-mode autofill rule above). */
+html.dark input:-webkit-autofill,
+html.dark input:-webkit-autofill:hover,
+html.dark input:-webkit-autofill:focus,
+html.dark input:-webkit-autofill:active {
+  -webkit-text-fill-color: #e2e8f0;
+  caret-color: #e2e8f0;
+  -webkit-box-shadow: 0 0 0 1000px #0f172a inset;
+  box-shadow: 0 0 0 1000px #0f172a inset;
+}
+
+/* ---- Builder node inspector (pf-inspector) ---------------------------- */
+html.dark .pf-inspector .label-text { color: #cbd5e1; }
+html.dark .pf-inspector .input,
+html.dark .pf-inspector .select,
+html.dark .pf-inspector .textarea {
+  background-color: #0f172a;
+  border-color: #334155;
+  color: #e2e8f0;
+}
+html.dark .pf-inspector .input::placeholder,
+html.dark .pf-inspector .textarea::placeholder { color: #64748b; }
+html.dark .pf-inspector code { color: #94a3b8; }
+
+/* ---- Chat simulator + conversation transcript ------------------------- */
+html.dark .pf-chat-pattern { background-color: #0b1220; }
+html.dark .pf-convo-canvas { background-color: rgba(2, 6, 23, 0.6); }
+html.dark .pf-bubble-in::before { border-top-color: #1e293b; }
+/* Inbound (contact) bubbles are white in light mode — darken their body too. */
+html.dark .pf-bubble-in { color: #e2e8f0; }
+
+/* ---- Accent chips: keep brand tints readable on dark ------------------ */
+html.dark .bg-teal-50 { background-color: rgba(13, 148, 136, 0.15) !important; }
+html.dark .bg-emerald-50 { background-color: rgba(16, 185, 129, 0.15) !important; }
+html.dark .bg-amber-50 { background-color: rgba(245, 158, 11, 0.15) !important; }
+html.dark .bg-rose-50,
+html.dark .bg-red-50 { background-color: rgba(244, 63, 94, 0.15) !important; }
+html.dark .bg-blue-50,
+html.dark .bg-sky-50 { background-color: rgba(14, 165, 233, 0.15) !important; }
+html.dark .bg-indigo-50,
+html.dark .bg-violet-50 { background-color: rgba(99, 102, 241, 0.15) !important; }
+html.dark .bg-slate-100.text-slate-500,
+html.dark .bg-slate-100.text-slate-700 { background-color: #243149 !important; }
+
+/* Keep readable accent text a touch brighter in dark mode. */
+html.dark .text-teal-700, html.dark .text-teal-800 { color: #5eead4 !important; }
+html.dark .text-emerald-700, html.dark .text-emerald-600 { color: #6ee7b7 !important; }
+html.dark .text-amber-700, html.dark .text-amber-800 { color: #fcd34d !important; }
+html.dark .text-rose-600, html.dark .text-rose-700 { color: #fda4af !important; }
+
+/* Shadows are nearly invisible on dark; replace with a subtle ring so cards
+   still separate from the background. */
+html.dark .shadow-sm,
+html.dark .shadow,
+html.dark .shadow-md,
+html.dark .shadow-lg,
+html.dark .shadow-2xl {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(148, 163, 184, 0.08) !important;
+}

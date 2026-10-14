@@ -2,6 +2,11 @@ import type { Config } from "tailwindcss";
 
 const config: Config = {
   content: ["./src/**/*.{js,ts,jsx,tsx,mdx}"],
+  // Class-based dark mode: a `dark` class on <html> drives all `dark:` variants.
+  // This is independent of daisyUI's data-theme (which only styles base-* and
+  // daisyUI component classes), so it works for the Material-3 token utilities
+  // the app uses everywhere.
+  darkMode: "class",
   theme: {
     extend: {
       // PingFlow "Serene" brand palette (teal + peach), used by the auth pages.

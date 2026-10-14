@@ -3,6 +3,7 @@ import { prisma } from "../../../infra/prisma.js";
 import { WhatsAppAdapter } from "../../messaging/adapters.js";
 import { handleInboundMessage } from "../../conversations/service.js";
 import type { InboundType, InboundMedia } from "../../runtime/types.js";
+import { verifyWebhookSignature } from "./security.js";
 
 export const webhookRouter = Router();
 
@@ -89,7 +90,9 @@ webhookRouter.get("/webhook", async (req: Request, res: Response) => {
 });
 
 // POST /api/whatsapp/webhook — inbound messages from Meta.
-webhookRouter.post("/webhook", async (req: Request, res: Response) => {
+// Guarded by verifyWebhookSignature: a forged/unsigned POST is rejected with
+// 401 before any processing happens.
+webhookRouter.post("/webhook", verifyWebhookSignature, async (req: Request, res: Response) => {
   // Ack Meta quickly with 200 so it doesn't retry endlessly.
   res.sendStatus(200);
 

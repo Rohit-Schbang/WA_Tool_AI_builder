@@ -98,8 +98,18 @@ export default function SettingsPage() {
     if (verifyToken) payload.verifyToken = verifyToken;
 
     try {
-      await api.put(`/api/chatbots/${chatbotId}/connection`, payload);
-      setMessage("Saved.");
+      const res = await api.put(`/api/chatbots/${chatbotId}/connection`, payload);
+      const status: string = res.data?.status;
+      const verifyMessage: string | null = res.data?.verifyMessage ?? null;
+      // Reflect the verification result from the server: CONNECTED means the
+      // credentials were validated against Meta; ERROR means they were rejected.
+      if (status === "CONNECTED") {
+        setMessage("Connected — credentials verified with Meta.");
+      } else if (status === "ERROR") {
+        setMessage(verifyMessage ? `Not connected: ${verifyMessage}` : "Not connected: Meta rejected these credentials.");
+      } else {
+        setMessage(verifyMessage ?? "Saved.");
+      }
       // Clear the secret inputs and refresh the "configured" indicators.
       setAccessToken("");
       setAppSecret("");
@@ -122,14 +132,14 @@ export default function SettingsPage() {
     "w-full h-10 px-3 rounded-lg bg-white text-slate-800 text-sm placeholder:text-slate-400 border border-slate-200 shadow-sm focus:outline-none focus:border-teal-600 focus:ring-1 focus:ring-teal-600 transition-all";
 
   return (
-    <div className="h-screen bg-[#f8f9ff] text-slate-800 overflow-hidden pl-72">
+    <div className="h-screen bg-[#f8f9ff] dark:bg-slate-950 text-slate-800 dark:text-slate-100 overflow-hidden pl-72 transition-colors">
       {/* Shared workspace sidebar */}
       <Sidebar />
 
       {/* ======================= MAIN CONTENT WRAPPER ======================= */}
       <div className="h-full flex flex-col min-w-0 overflow-hidden">
         {/* Top bar */}
-        <header className="h-16 border-b border-slate-200/80 bg-white/95 backdrop-blur px-6 flex items-center justify-between z-10">
+        <header className="h-16 border-b border-slate-200/80 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur px-6 flex items-center justify-between z-10">
           <nav className="flex items-center gap-2 text-xs font-medium text-slate-500">
             <Link href="/chatbots" className="hover:text-slate-800 transition-colors">
               Workflows &amp; Bots
@@ -147,7 +157,7 @@ export default function SettingsPage() {
         </header>
 
         {/* Scrollable content */}
-        <main className="flex-1 overflow-y-auto bg-[#f8f9ff] px-6 py-6">
+        <main className="flex-1 overflow-y-auto bg-[#f8f9ff] dark:bg-slate-950 px-6 py-6">
           {/* Banner */}
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
             <div className="flex flex-col gap-1">
@@ -378,7 +388,7 @@ export default function SettingsPage() {
                       </button>
                     </div>
                     {message && (
-                      <p className={`text-sm font-medium ${message === "Saved." ? "text-emerald-600" : "text-rose-600"}`}>
+                      <p className={`text-sm font-medium ${/^(Saved\.|Connected)/.test(message) ? "text-emerald-600" : "text-rose-600"}`}>
                         {message}
                       </p>
                     )}

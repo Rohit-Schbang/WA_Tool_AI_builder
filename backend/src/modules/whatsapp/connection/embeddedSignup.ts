@@ -166,6 +166,22 @@ async function registerPhoneNumber(phoneNumberId: string, token: string): Promis
   }
 }
 
+// Verify a MANUALLY-entered access token against Meta: fetch the phone number
+// by id. If Meta returns the number, the token works and we treat the number as
+// connected. Returns the display number + verified name for display. Throws
+// EmbeddedSignupError (with Meta's message) when the token/id are invalid.
+export async function verifyManualCredentials(input: {
+  accessToken: string;
+  phoneNumberId: string;
+}): Promise<{ displayPhoneNumber?: string; verifiedName?: string }> {
+  const data = await graphFetch(
+    `${GRAPH()}/${input.phoneNumberId}?fields=display_phone_number,verified_name`,
+    { headers: { Authorization: `Bearer ${input.accessToken}` } },
+    "Verify credentials"
+  );
+  return { displayPhoneNumber: data?.display_phone_number, verifiedName: data?.verified_name };
+}
+
 // Read the phone number's current platform + verification status. Used both at
 // connect time and by the periodic health check so the dashboard can show a
 // live "number status" like Gupshup/Wati do.

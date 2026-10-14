@@ -2,9 +2,9 @@
 import { Request, Response, Router } from "express";
 import { z } from "zod";
 import { getChatbot } from "../../chatbots/service.js";
-import { getConnection, ToSafeConnection, upsertConnection } from "./service.js";
+import { getConnection, ToSafeConnection, upsertConnection, type ConnectionInput } from "./service.js";
 import { config } from "../../../infra/config.js";
-import { completeEmbeddedSignup, isEmbeddedSignupConfigured, EmbeddedSignupError, getConnectionHealth } from "./embeddedSignup.js";
+import { completeEmbeddedSignup, isEmbeddedSignupConfigured, EmbeddedSignupError, getConnectionHealth, verifyManualCredentials } from "./embeddedSignup.js";
 export const whatsappRouter = Router();
 
 
@@ -62,8 +62,37 @@ connectionRouter.put("/", async (req: Request, res: Response) => {
 
   if (!parsed.success) return res.status(400).json({ error: "Invalid inputs", details: parsed.error.flatten() })
 
-  const conn = await upsertConnection(chatbotId, parsed.data)
-  return res.json(ToSafeConnection(conn))
+  const data: ConnectionInput = { ...parsed.data }
+
+  // Determine the effective access token + phone number id after this save
+  // (fall back to what's already stored, since secret fields are left blank to
+  // keep the existing value). If we have both, verify them against Meta and set
+  // the connection status accordingly — this is what flips the manual path from
+  // DISCONNECTED to CONNECTED.
+  const existing = await getConnection(chatbotId)
+  const effectiveToken = data.accessToken ?? existing?.accessToken ?? null
+  const effectivePhoneId = data.phoneNumberId ?? existing?.phoneNumberId ?? null
+
+  let verifyMessage: string | null = null
+  if (effectiveToken && effectivePhoneId) {
+    try {
+      const info = await verifyManualCredentials({ accessToken: effectiveToken, phoneNumberId: effectivePhoneId })
+      data.status = "CONNECTED"
+      // Backfill display fields from Meta if the user didn't type them.
+      if (!data.phoneNumber && info.displayPhoneNumber) data.phoneNumber = info.displayPhoneNumber
+      if (!data.businessName && info.verifiedName) data.businessName = info.verifiedName
+    } catch (err) {
+      data.status = "ERROR"
+      verifyMessage = err instanceof EmbeddedSignupError ? err.message : "Could not verify these credentials with Meta."
+    }
+  } else {
+    // Not enough to be connected yet.
+    data.status = "DISCONNECTED"
+    verifyMessage = "Add both an Access Token and Phone Number ID to connect."
+  }
+
+  const conn = await upsertConnection(chatbotId, data)
+  return res.json({ ...ToSafeConnection(conn), verifyMessage })
 
 
 })

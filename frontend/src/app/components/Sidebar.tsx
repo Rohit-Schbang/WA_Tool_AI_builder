@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { getToken } from "@/lib/auth";
+import { ThemeToggle } from "./ThemeToggle";
 
 // The single, shared workspace sidebar used across all dashboard pages.
 // The highlighted item is derived from the current URL so it's always
@@ -63,8 +64,8 @@ export function Sidebar({ active }: { active?: SidebarItem }) {
     const isActive = item.key === current;
     const base =
       "group flex items-center gap-3 px-3 py-2.5 rounded-lg font-label-lg text-label-lg transition-all";
-    const activeCls = "bg-primary-container text-on-primary-container font-semibold shadow-sm";
-    const idleCls = "text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface";
+    const activeCls = "bg-primary-container text-on-primary-container dark:bg-teal-600 dark:text-white font-semibold shadow-sm";
+    const idleCls = "text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100";
 
     // Settings is per-chatbot: resolve to the first bot's settings, else disable.
     let href = item.href;
@@ -102,7 +103,7 @@ export function Sidebar({ active }: { active?: SidebarItem }) {
   }
 
   return (
-    <aside className="fixed left-0 top-0 h-full w-72 bg-surface-container-lowest shadow-[0_1px_8px_rgba(0,0,0,0.04)] z-50 flex flex-col justify-between">
+    <aside className="fixed left-0 top-0 h-full w-72 bg-surface-container-lowest dark:bg-slate-900 dark:border-r dark:border-slate-800 shadow-[0_1px_8px_rgba(0,0,0,0.04)] z-50 flex flex-col justify-between transition-colors">
       <div className="flex flex-col">
         <div className="h-16 px-space-lg flex items-center gap-space-sm">
           <div className="h-8 w-8 rounded-md bg-primary flex items-center justify-center text-on-primary shrink-0">
@@ -111,8 +112,8 @@ export function Sidebar({ active }: { active?: SidebarItem }) {
             </span>
           </div>
           <div className="flex flex-col">
-            <span className="font-headline-sm text-headline-sm text-on-surface tracking-tight leading-none">PingFlow</span>
-            <span className="font-label-sm text-label-sm text-on-surface-variant leading-tight mt-0.5">
+            <span className="font-headline-sm text-headline-sm text-on-surface dark:text-slate-100 tracking-tight leading-none">PingFlow</span>
+            <span className="font-label-sm text-label-sm text-on-surface-variant dark:text-slate-400 leading-tight mt-0.5">
               WhatsApp Automation
             </span>
           </div>
@@ -129,6 +130,12 @@ export function Sidebar({ active }: { active?: SidebarItem }) {
           </p>
           <nav className="flex flex-col gap-1">{items.map(renderItem)}</nav>
         </div>
+      </div>
+
+      {/* Footer — appearance toggle */}
+      <div className="px-space-lg py-space-md border-t border-slate-200/70 dark:border-slate-800 flex items-center justify-between">
+        <span className="font-label-sm text-label-sm text-on-surface-variant dark:text-slate-400">Appearance</span>
+        <ThemeToggle />
       </div>
     </aside>
   );

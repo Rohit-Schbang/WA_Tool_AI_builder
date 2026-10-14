@@ -11,6 +11,14 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" data-theme="wa" suppressHydrationWarning>
       <head>
+        {/* No-flash theme bootstrap: apply the saved/system theme BEFORE first
+            paint so the page never flashes the wrong colors. Mirrors the logic
+            in src/lib/theme.ts (kept inline + dependency-free on purpose). */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var k='pf-theme';var s=localStorage.getItem(k);var d=s==='dark'||(!s&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches);var r=document.documentElement;if(d){r.classList.add('dark');r.setAttribute('data-theme','dark');}else{r.classList.remove('dark');r.setAttribute('data-theme','wa');}}catch(e){}})();`,
+          }}
+        />
         {/* Ask the Dark Reader extension to leave this app alone. Without this,
             Dark Reader injects data-darkreader-* attributes and inline styles
             into the DOM (e.g. React Flow's <Background/> SVG) after the server
@@ -40,7 +48,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.2/src/bold/style.css"
         />
       </head>
-      <body className="min-h-screen bg-base-200" suppressHydrationWarning>
+      <body className="min-h-screen bg-base-200 dark:bg-slate-950 text-slate-900 dark:text-slate-100 transition-colors" suppressHydrationWarning>
         {children}
       </body>
     </html>

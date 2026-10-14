@@ -35,6 +35,17 @@ const envSchema = z.object({
   META_GRAPH_VERSION: z.string().default("v22.0"),
   META_REDIRECT_URI: z.string().optional(),        // must match a registered OAuth redirect URI
   WHATSAPP_REGISTER_PIN: z.string().default("000000"), // 6-digit PIN used when registering the phone number
+
+  // --- API security ---
+  // When true, inbound webhook POSTs MUST carry a valid Meta X-Hub-Signature-256
+  // (HMAC-SHA256 of the raw body with META_APP_SECRET). Defaults to on when an
+  // app secret is configured. Set WEBHOOK_VERIFY_SIGNATURE=false to bypass
+  // (e.g. local testing with a tool that can't sign requests).
+  WEBHOOK_VERIFY_SIGNATURE: z.enum(["true", "false"]).optional(),
+  // Optional shared secret for machine/server-to-server callers. When set, the
+  // requireApiKey middleware guards whatever routes it's applied to. The
+  // JWT-authenticated browser frontend does NOT use this.
+  BACKEND_API_KEY: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);
