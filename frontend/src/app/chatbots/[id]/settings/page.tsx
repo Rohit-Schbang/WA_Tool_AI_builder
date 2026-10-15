@@ -45,6 +45,7 @@ export default function SettingsPage() {
 
   // Real webhook endpoint derived from the configured API base URL.
   const webhookUrl = useMemo(() => {
+
     const base = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000").replace(/\/$/, "");
     return `${base}/api/whatsapp/webhook`;
   }, []);

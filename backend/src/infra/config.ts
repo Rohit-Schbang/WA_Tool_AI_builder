@@ -24,6 +24,7 @@ const envSchema = z.object({
   GEMINI_API_KEY: z.string().optional(),
 
   // --- WhatsApp Embedded Signup (Meta) ---
+
   // All optional so the app boots without them; the embedded-signup flow is
   // simply disabled until the manager provides these from the Meta App
   // dashboard. APP_ID + CONFIG_ID are safe to expose to the frontend (for the

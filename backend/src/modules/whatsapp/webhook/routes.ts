@@ -70,6 +70,10 @@ function parseInbound(message: any): { text: string; inbound: { type: InboundTyp
 // When you subscribe, Meta calls this with a challenge; echo it back
 // if the verify token matches what we stored.
 webhookRouter.get("/webhook", async (req: Request, res: Response) => {
+  console.log(req.body)
+  console.log(req.query)
+  console.log(req.params)
+
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
   const challenge = req.query["hub.challenge"];
