@@ -99,6 +99,9 @@ webhookRouter.get("/webhook", async (req: Request, res: Response) => {
 webhookRouter.post("/webhook", verifyWebhookSignature, async (req: Request, res: Response) => {
   // Ack Meta quickly with 200 so it doesn't retry endlessly.
   res.sendStatus(200);
+  console.log(req.body)
+  console.log(req.query)
+  console.log(req.params)
 
   try {
     const entry = req.body?.entry?.[0];
