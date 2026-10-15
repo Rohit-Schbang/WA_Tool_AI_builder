@@ -47,6 +47,11 @@ const envSchema = z.object({
   // requireApiKey middleware guards whatever routes it's applied to. The
   // JWT-authenticated browser frontend does NOT use this.
   BACKEND_API_KEY: z.string().optional(),
+
+  // --- Organisation-only access ---
+  // Comma-separated list of email domains allowed to sign up / log in.
+  // Defaults to schbang.com.
+  ALLOWED_EMAIL_DOMAINS: z.string().default("schbang.com"),
 });
 
 const parsed = envSchema.safeParse(process.env);

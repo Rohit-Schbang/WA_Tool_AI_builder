@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import Script from "next/script";
 import "./globals.css";
 
 export const metadata = {
@@ -13,8 +14,12 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       <head>
         {/* No-flash theme bootstrap: apply the saved/system theme BEFORE first
             paint so the page never flashes the wrong colors. Mirrors the logic
-            in src/lib/theme.ts (kept inline + dependency-free on purpose). */}
-        <script
+            in src/lib/theme.ts (kept inline + dependency-free on purpose).
+            next/script with beforeInteractive runs it before hydration without
+            React 19's "script tag inside a component" warning. */}
+        <Script
+          id="pf-theme-init"
+          strategy="beforeInteractive"
           dangerouslySetInnerHTML={{
             __html: `(function(){try{var k='pf-theme';var s=localStorage.getItem(k);var d=s==='dark'||(!s&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches);var r=document.documentElement;if(d){r.classList.add('dark');r.setAttribute('data-theme','dark');}else{r.classList.remove('dark');r.setAttribute('data-theme','wa');}}catch(e){}})();`,
           }}

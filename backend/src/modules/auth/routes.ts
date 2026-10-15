@@ -3,6 +3,7 @@ import { Router, Request, Response } from "express";
 import { z } from "zod"
 import { registerUser, loginUser } from "./service.js";
 import { requireAuth } from "./middleware.js";
+import { allowedDomains, domainErrorMessage } from "./domain.js";
 
 export const authRouter = Router();
 
@@ -45,6 +46,9 @@ authRouter.post("/register", async (req: Request, res: Response) => {
     if (error instanceof Error && error.message == "Email taken") {
       return res.status(409).json({ error: "Email already registered" })
     }
+    if (error instanceof Error && error.message == "DOMAIN_NOT_ALLOWED") {
+      return res.status(403).json({ error: domainErrorMessage })
+    }
     console.log("Register error", error)
     return res.status(500).json({ error: "Internal Sever Error" })
   }
@@ -68,10 +72,19 @@ authRouter.post("/login", async (req: Request, res: Response) => {
     if (error instanceof Error && error.message == "INVALID CREDENTIALS") {
       return res.status(401).json({ error: "Invalid Email or Password" })
     }
+    if (error instanceof Error && error.message == "DOMAIN_NOT_ALLOWED") {
+      return res.status(403).json({ error: domainErrorMessage })
+    }
     console.log("Login Error: ", error)
     return res.status(500).json({ error: "Internal Server Error" })
   }
 
 
+})
+
+// GET /api/auth/config — public settings the login page needs: which email
+// domains are allowed (for the hint + instant validation).
+authRouter.get("/config", (_req: Request, res: Response) => {
+  res.json({ allowedDomains })
 })
 

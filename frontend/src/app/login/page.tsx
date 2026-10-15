@@ -3,7 +3,7 @@
 import { api } from "@/lib/api";
 import { saveToken } from "@/lib/auth";
 import { useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 // Password strength scoring: returns a 0-4 score plus a label, bar color,
 // and a hint describing what's still missing.
@@ -80,18 +80,6 @@ function Logo({ className = "h-9 w-9" }: { className?: string }) {
         bolt
       </span>
     </div>
-  );
-}
-
-// Google "G" icon used by the social auth buttons.
-function GoogleIcon() {
-  return (
-    <svg className="w-4 h-4" viewBox="0 0 24 24">
-      <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4" />
-      <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853" />
-      <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" fill="#FBBC05" />
-      <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" fill="#EA4335" />
-    </svg>
   );
 }
 
@@ -289,9 +277,34 @@ export default function LoginPage() {
   const isRegister = mode === "register";
   const strength = useMemo(() => getPasswordStrength(password), [password]);
 
+  // Organisation-only access: allowed domains come from the backend so the rule
+  // lives in one place. The backend enforces it; the check here just gives
+  // instant feedback.
+  const [allowedDomains, setAllowedDomains] = useState<string[]>(["schbang.com"]);
+  useEffect(() => {
+    api
+      .get("/api/auth/config")
+      .then((res) => {
+        if (Array.isArray(res.data?.allowedDomains) && res.data.allowedDomains.length) {
+          setAllowedDomains(res.data.allowedDomains);
+        }
+      })
+      .catch(() => {});
+  }, []);
+  const domainLabel = allowedDomains.map((d) => "@" + d).join(", ");
+  const emailDomainOk = (value: string) => {
+    const at = value.trim().toLowerCase().lastIndexOf("@");
+    return at > 0 && allowedDomains.includes(value.trim().toLowerCase().slice(at + 1));
+  };
+  const showDomainWarning = email.includes("@") && email.split("@")[1]?.length > 0 && !emailDomainOk(email);
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
+    if (!emailDomainOk(email)) {
+      setError(`Only ${domainLabel} email addresses can access this workspace.`);
+      return;
+    }
     setIsLoading(true);
 
     try {
@@ -372,24 +385,6 @@ export default function LoginPage() {
               </p>
             </div>
 
-            {isRegister && (
-              <button
-                type="button"
-                className="w-full h-11 mb-4 px-4 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 text-sm font-semibold rounded-xl shadow-sm transition-all flex items-center justify-center gap-2.5"
-              >
-                <GoogleIcon />
-                <span>Sign up with Google</span>
-              </button>
-            )}
-
-            {isRegister && (
-              <div className="relative mb-4 flex items-center justify-center">
-                <div className="w-full h-px bg-slate-200" />
-                <span className="absolute bg-[#f8fafc] px-3 text-xs text-slate-400 uppercase tracking-wider font-semibold">
-                  Or with work email
-                </span>
-              </div>
-            )}
 
             {/* Form */}
             <form onSubmit={handleSubmit} className="space-y-4">
@@ -422,13 +417,20 @@ export default function LoginPage() {
                   <input
                     id="work-email"
                     type="email"
-                    placeholder="name@company.com"
+                    placeholder={`name@${allowedDomains[0]}`}
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     required
-                    className="w-full h-11 pl-10 pr-3.5 bg-white text-slate-800 border border-slate-200 text-sm rounded-xl shadow-sm placeholder:text-slate-400 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-100 transition-all"
+                    aria-describedby="work-email-hint"
+                    aria-invalid={showDomainWarning}
+                    className={`w-full h-11 pl-10 pr-3.5 bg-white text-slate-800 border ${showDomainWarning ? "border-error" : "border-slate-200"} text-sm rounded-xl shadow-sm placeholder:text-slate-400 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-100 transition-all`}
                   />
                 </div>
+                <p id="work-email-hint" className={`mt-1 text-[11px] ${showDomainWarning ? "text-error" : "text-slate-500"}`}>
+                  {showDomainWarning
+                    ? `Use your ${domainLabel} email. Other domains can't access this workspace.`
+                    : `Only ${domainLabel} accounts can sign in.`}
+                </p>
               </div>
 
               {isRegister && (
@@ -570,25 +572,6 @@ export default function LoginPage() {
                 )}
               </button>
             </form>
-
-            {!isRegister && (
-              <>
-                <div className="relative my-6 flex items-center justify-center">
-                  <div className="w-full h-px bg-slate-200" />
-                  <span className="absolute bg-[#f8fafc] px-3 text-xs text-slate-400 uppercase tracking-wider font-semibold">Or quick access</span>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                  <button type="button" className="h-10 px-3.5 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 text-xs font-semibold rounded-xl shadow-sm transition-all flex items-center justify-center gap-2.5">
-                    <GoogleIcon />
-                    <span>Google Workspace</span>
-                  </button>
-                  <button type="button" className="h-10 px-3.5 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 text-xs font-semibold rounded-xl shadow-sm transition-all flex items-center justify-center gap-2">
-                    <span className="material-symbols-outlined text-[18px] text-teal-600">chat</span>
-                    <span>WhatsApp OTP</span>
-                  </button>
-                </div>
-              </>
-            )}
 
             {/* Footer / mode switch */}
             <div className={isRegister ? "mt-6 text-center" : "mt-6 pt-4"}>

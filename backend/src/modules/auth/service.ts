@@ -1,6 +1,7 @@
 import { prisma } from "../../infra/prisma.js"
 import { hashPassword, comparePassword } from "./password.js"
 import { signToken } from "./jwt.js"
+import { isAllowedEmail } from "./domain.js"
 
 interface AuthResult {
     token: string,
@@ -11,67 +12,55 @@ interface AuthResult {
     }
 }
 
+function normalizeEmail(email: string): string {
+    return email.trim().toLowerCase()
+}
+
+function authResult(user: { id: string; email: string; name: string | null }): AuthResult {
+    return {
+        token: signToken({ userId: user.id }),
+        user: { id: user.id, email: user.email, name: user.name },
+    }
+}
+
 export async function registerUser(
     email: string,
     name: string,
     password: string
 ): Promise<AuthResult> {
+    email = normalizeEmail(email)
 
-    //  This checks if the user exisits with same email id in db 
+    // Organisation-only: reject non-company emails before touching the DB.
+    if (!isAllowedEmail(email)) throw new Error("DOMAIN_NOT_ALLOWED")
+
     const existing = await prisma.user.findUnique({ where: { email } })
     if (existing) {
         throw new Error("Email taken")
     }
 
-    // Create new user --> 
-    // Step 1. -------->>>>> Password hashing 
-
     const passwordHash = await hashPassword(password)
     const user = await prisma.user.create({
-        data: {
-            name, passwordHash, email
-        }
+        data: { name, passwordHash, email }
     })
 
-    // Step 2. -------->>>>> Creating token for the user created
-
-    const token = signToken({ userId: user.id })
-
-    return {
-        token, user: {
-            id: user.id, email: user.email, name: user.name
-        }
-    }
-
-
+    return authResult(user)
 }
 
-// Login function 
-
 export async function loginUser(email: string, password: string): Promise<AuthResult> {
+    email = normalizeEmail(email)
 
-    // Find  the User
+    // Also enforced at login, so any pre-existing non-company accounts are locked out.
+    if (!isAllowedEmail(email)) throw new Error("DOMAIN_NOT_ALLOWED")
+
     const user = await prisma.user.findUnique({ where: { email } })
-
     if (!user) {
         throw new Error("INVALID CREDENTIALS")
     }
 
     const matched = await comparePassword(password, user.passwordHash)
-    //    If  no credentials matched
     if (!matched) {
         throw new Error("INVALID CREDENTIALS")
     }
 
-    const token = signToken({ userId: user.id })
-    return {
-        token, user: {
-            id: user.id,
-            name: user.name,
-            email: user.email
-        }
-    }
-
-
-
+    return authResult(user)
 }
