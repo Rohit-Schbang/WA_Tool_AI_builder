@@ -72,7 +72,7 @@ function getPasswordStrength(pw: string): Strength {
   return { score, label, barClass, textClass, hint };
 }
 
-// Small inline brand mark for PingFlow — avoids depending on an external image asset.
+// Small inline brand mark for Whatsbang — avoids depending on an external image asset.
 function Logo({ className = "h-9 w-9" }: { className?: string }) {
   return (
     <div className={`${className} rounded-xl bg-teal-600 flex items-center justify-center text-white shadow-sm shrink-0`}>
@@ -120,7 +120,7 @@ function Showcase() {
                   </div>
                   <div className="min-w-0">
                     <div className="flex items-center gap-1">
-                      <h3 className="font-bold text-[11px] text-white leading-tight truncate">PingFlow Concierge</h3>
+                      <h3 className="font-bold text-[11px] text-white leading-tight truncate">Whatsbang Concierge</h3>
                       <span className="material-symbols-outlined text-emerald-300 text-[13px] shrink-0">verified</span>
                     </div>
                     <p className="text-[9px] text-teal-100/90 leading-tight truncate">Online • Replies instantly</p>
@@ -338,7 +338,7 @@ export default function LoginPage() {
       <header className="w-full max-w-7xl mx-auto px-6 sm:px-8 pt-6 flex items-center justify-between">
         <a href="/login" className="flex items-center gap-2.5 group">
           <Logo className="h-9 w-9" />
-          <span className="font-bold text-lg text-slate-900 tracking-tight group-hover:text-teal-700 transition-colors">PingFlow</span>
+          <span className="font-bold text-lg text-slate-900 tracking-tight group-hover:text-teal-700 transition-colors">Whatsbang</span>
         </a>
         <div className="flex items-center gap-2 bg-teal-50/90 border border-teal-200/80 text-teal-800 text-xs font-semibold px-3 py-1 rounded-full">
           <span className="w-2 h-2 rounded-full bg-teal-500 animate-pulse" />
@@ -355,7 +355,7 @@ export default function LoginPage() {
               <div className="flex items-center justify-between mb-6">
                 <div className="flex items-center gap-3">
                   <Logo className="w-11 h-11" />
-                  <span className="font-bold text-lg text-slate-900 tracking-tight">PingFlow</span>
+                  <span className="font-bold text-lg text-slate-900 tracking-tight">Whatsbang</span>
                 </div>
                 <span className="inline-flex items-center gap-1.5 text-[11px] text-peach-600 bg-peach-50 px-3 py-1 rounded-full border border-peach-200/70 tracking-wider uppercase font-semibold">
                   <span className="w-1.5 h-1.5 rounded-full bg-peach-500 animate-ping" />
@@ -366,7 +366,7 @@ export default function LoginPage() {
               <div className="flex items-center gap-3 mb-6">
                 <Logo className="w-11 h-11" />
                 <div>
-                  <span className="font-bold text-lg text-slate-900 tracking-tight block">PingFlow</span>
+                  <span className="font-bold text-lg text-slate-900 tracking-tight block">Whatsbang</span>
                   <span className="text-[11px] text-peach-600 bg-peach-50 px-2 py-0.5 rounded-full border border-peach-200/70 tracking-wider uppercase font-semibold">
                     Workspace Auth
                   </span>
@@ -530,7 +530,7 @@ export default function LoginPage() {
                     className="mt-0.5 w-4 h-4 rounded text-teal-600 focus:ring-teal-500/20 accent-teal-600 cursor-pointer border-slate-300"
                   />
                   <span className="text-xs text-slate-600 leading-tight">
-                    I agree to PingFlow's <a href="#" className="text-teal-700 hover:underline font-medium">Terms of Service</a>,{" "}
+                    I agree to Whatsbang's <a href="#" className="text-teal-700 hover:underline font-medium">Terms of Service</a>,{" "}
                     <a href="#" className="text-teal-700 hover:underline font-medium">Data Processing Addendum</a>, and{" "}
                     <a href="#" className="text-teal-700 hover:underline font-medium">Privacy Policy</a>.
                   </span>
@@ -577,7 +577,7 @@ export default function LoginPage() {
             <div className={isRegister ? "mt-6 text-center" : "mt-6 pt-4"}>
               {isRegister ? (
                 <p className="text-xs text-slate-600">
-                  Already using PingFlow?
+                  Already using Whatsbang?
                   <button type="button" onClick={switchMode} className="font-semibold text-teal-700 hover:text-teal-800 transition-colors underline ml-1">
                     Sign In
                   </button>
@@ -603,7 +603,7 @@ export default function LoginPage() {
 
       {/* Footer */}
       <footer className="w-full max-w-7xl mx-auto px-6 sm:px-8 pb-6 flex flex-col sm:flex-row items-center justify-between gap-3 text-slate-500 text-xs">
-        <p>© 2024 PingFlow Inc. High-velocity visual journey orchestration.</p>
+        <p>© 2024 Whatsbang Inc. High-velocity visual journey orchestration.</p>
         <div className="flex items-center gap-6">
           <a className="hover:text-slate-800 transition-colors" href="#">Privacy Policy</a>
           <a className="hover:text-slate-800 transition-colors" href="#">Terms of Service</a>

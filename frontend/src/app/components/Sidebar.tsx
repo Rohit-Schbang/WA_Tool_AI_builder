@@ -31,13 +31,27 @@ function sectionFromPath(pathname: string | null): SidebarItem {
   if (pathname.startsWith("/contacts")) return "contacts";
   if (pathname.startsWith("/broadcasts")) return "broadcasts";
   if (pathname.startsWith("/templates")) return "templates";
-  // Everything under /chatbots (list + per-bot sub-pages) is "workflows".
+  // Per-bot sub-pages that have their own sidebar entry.
+  if (/^\/chatbots\/[^/]+\/settings/.test(pathname)) return "settings";
+  if (/^\/chatbots\/[^/]+\/analytics/.test(pathname)) return "analytics";
+  // Everything else under /chatbots (list, builder, conversations) is "workflows".
   return "workflows";
+}
+
+// The bot id in the current URL (/chatbots/<id>/...), if any.
+function botIdFromPath(pathname: string | null): string | null {
+  const m = pathname?.match(/^\/chatbots\/([^/]+)\//);
+  return m ? m[1] : null;
 }
 
 export function Sidebar({ active }: { active?: SidebarItem }) {
   const pathname = usePathname();
-  const current: SidebarItem = active ?? sectionFromPath(pathname);
+  // URL wins over the `active` prop so per-bot Settings/Analytics pages always
+  // highlight the right item even if a page passes a stale `active`.
+  const fromPath = sectionFromPath(pathname);
+  const current: SidebarItem =
+    fromPath === "settings" || fromPath === "analytics" ? fromPath : active ?? fromPath;
+  const currentBotId = botIdFromPath(pathname);
   const [firstBotId, setFirstBotId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -67,9 +81,12 @@ export function Sidebar({ active }: { active?: SidebarItem }) {
     const activeCls = "bg-primary-container text-on-primary-container dark:bg-teal-600 dark:text-white font-semibold shadow-sm";
     const idleCls = "text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100";
 
-    // Settings is per-chatbot: resolve to the first bot's settings, else disable.
+    // Settings is per-chatbot: the bot you're currently on, else the newest
+    // bot, else disabled.
     let href = item.href;
-    if (item.key === "settings") href = firstBotId ? `/chatbots/${firstBotId}/settings` : undefined;
+    const botId = currentBotId ?? firstBotId;
+    if (item.key === "settings") href = botId ? `/chatbots/${botId}/settings` : undefined;
+    if (item.key === "analytics" && currentBotId) href = `/chatbots/${currentBotId}/analytics`;
 
     const inner = (
       <>
@@ -112,16 +129,10 @@ export function Sidebar({ active }: { active?: SidebarItem }) {
             </span>
           </div>
           <div className="flex flex-col">
-            <span className="font-headline-sm text-headline-sm text-on-surface dark:text-slate-100 tracking-tight leading-none">PingFlow</span>
+            <span className="font-headline-sm text-headline-sm text-on-surface dark:text-slate-100 tracking-tight leading-none">Whatsbang</span>
             <span className="font-label-sm text-label-sm text-on-surface-variant dark:text-slate-400 leading-tight mt-0.5">
               WhatsApp Automation
             </span>
-          </div>
-        </div>
-        <div className="px-space-lg pt-space-xs pb-space-md">
-          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-surface-container text-primary font-label-sm text-label-sm">
-            <span className="material-symbols-outlined text-[14px] text-primary">verified</span>
-            <span>Enterprise Cloud API</span>
           </div>
         </div>
         <div className="px-space-md py-space-xs">

@@ -11,7 +11,7 @@ html {
   font-optical-sizing: auto;
 }
 
-/* Floating metric card animations for the PingFlow auth showcase. */
+/* Floating metric card animations for the Whatsbang auth showcase. */
 @keyframes float1 {
   0%, 100% { transform: translateY(0px); }
   50% { transform: translateY(-7px); }
@@ -54,7 +54,7 @@ input:-webkit-autofill:active {
   transition: background-color 5000s ease-in-out 0s;
 }
 
-/* Material Symbols Outlined icon font, used across the PingFlow auth pages. */
+/* Material Symbols Outlined icon font, used across the Whatsbang auth pages. */
 .material-symbols-outlined {
   font-family: "Material Symbols Outlined";
   font-weight: normal;
@@ -107,7 +107,7 @@ input:-webkit-autofill:active {
 }
 
 /* ---- Flow builder node inspector: unify all node config fields to the
-   PingFlow teal style, regardless of whether the JSX still uses daisyUI
+   Whatsbang teal style, regardless of whether the JSX still uses daisyUI
    classes (form-control / label-text / input / select / textarea). ---- */
 .pf-inspector .form-control {
   display: flex;

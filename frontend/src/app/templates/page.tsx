@@ -467,7 +467,7 @@ export default function TemplatesPage() {
                           <span className="bg-primary-fixed px-2 py-0.5 rounded text-on-primary-fixed font-mono text-[13px] font-bold">
                             {"{{1}}"}
                           </span>{" "}
-                          is your PingFlow verification code. For your security, do not share this code with anyone. Valid
+                          is your Whatsbang verification code. For your security, do not share this code with anyone. Valid
                           for 10 minutes.
                         </p>
                         <div className="flex justify-end items-center gap-1 mt-2 text-on-surface-variant">
@@ -671,7 +671,7 @@ export default function TemplatesPage() {
 
                       <div className="bg-surface-container-lowest p-3.5 rounded-lg shadow-sm max-w-[92%] relative opacity-60">
                         <p className="font-body-md text-body-md text-on-surface">
-                          Special promo notification for pingflow accounts... Click link to claim your bonus credits
+                          Special promo notification for whatsbang accounts... Click link to claim your bonus credits
                           before month end.
                         </p>
                         <div className="flex justify-end items-center gap-1 mt-2 text-on-surface-variant">
@@ -706,7 +706,7 @@ export default function TemplatesPage() {
                       Meta Tier 2 Automated Validation
                     </span>
                     <p className="font-body-sm text-body-sm text-on-surface-variant">
-                      All submitted templates run PingFlow pre-flight linting against WhatsApp Cloud API Business policies
+                      All submitted templates run Whatsbang pre-flight linting against WhatsApp Cloud API Business policies
                       to ensure a 94%+ first-time approval rate.
                     </p>
                   </div>

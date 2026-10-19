@@ -3,8 +3,8 @@ import Script from "next/script";
 import "./globals.css";
 
 export const metadata = {
-  title: "WA AI Tool",
-  description: "Workflow automation engine with a WhatsApp adapter",
+  title: "Whatsbang",
+  description: "WhatsApp automation and chatbot builder",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
@@ -30,7 +30,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             render but before hydration, causing a hydration-mismatch error and
             repainting our light UI (black input text on dark backgrounds). */}
         <meta name="darkreader-lock" />
-        {/* Fonts used by the PingFlow "Sky & Peach" auth pages (login/register). */}
+        {/* Fonts used by the Whatsbang "Sky & Peach" auth pages (login/register). */}
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
         <link

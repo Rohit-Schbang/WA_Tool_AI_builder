@@ -21,7 +21,7 @@ const envSchema = z.object({
   JWT_SECRET: z.string().min(1, "JWT_SECRET is required"),
   JWT_EXPIRES_IN: z.string().default("7d"),
   // Comma-separated list of allowed browser origins (no trailing slash needed).
-  FRONTEND_ORIGIN: z.string().default("http://localhost:3000"),
+  FRONTEND_ORIGIN: z.string().default("https://waaitool.vercel.app"),
   GEMINI_API_KEY: z.string().optional(),
 
   // --- WhatsApp Embedded Signup (Meta) ---

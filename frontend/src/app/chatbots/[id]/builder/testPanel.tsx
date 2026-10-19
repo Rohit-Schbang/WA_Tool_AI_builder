@@ -24,12 +24,19 @@ function nowLabel() {
 export function TestPanel({
   chatbotId,
   beforeSend,
+  hideLauncher = false,
+  onOpenChange,
 }: {
   chatbotId: string;
   // Called before each test message so the server draft matches the canvas.
   beforeSend?: () => Promise<unknown>;
+  // Hide the floating launcher (e.g. while the AI generator panel is open, so
+  // the two bottom-right widgets never overlap).
+  hideLauncher?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
+  useEffect(() => { onOpenChange?.(open); }, [open, onOpenChange]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -133,7 +140,7 @@ export function TestPanel({
   return (
     <>
       {/* Floating launcher button */}
-      {!open && (
+      {!open && !hideLauncher && (
         <button
           onClick={() => { setOpen(true); if (messages.length === 0) startOver(); }}
           className="fixed bottom-6 right-6 z-50 w-14 h-14 rounded-2xl bg-gradient-to-tr from-teal-800 via-teal-700 to-teal-500 text-white flex items-center justify-center shadow-xl shadow-teal-700/30 ring-2 ring-teal-500/30 hover:scale-105 active:scale-95 transition"

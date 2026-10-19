@@ -8,6 +8,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Sidebar } from "@/app/components/Sidebar";
 import { EmbeddedSignup } from "./EmbeddedSignup";
 import { ConnectionHealth } from "./ConnectionHealth";
+import { EditableBotName } from "@/app/components/EditableBotName";
 
 // Shape of the safe connection returned from the backend (no secret values).
 interface SafeConnection {
@@ -72,11 +73,14 @@ export default function SettingsPage() {
     }
   }
 
+  const [botName, setBotName] = useState("");
+
   useEffect(() => {
     if (!getToken()) {
       router.push("/login");
       return;
     }
+    api.get(`/api/chatbots/${chatbotId}`).then((res) => setBotName(res.data?.name ?? "")).catch(() => {});
     loadConnection();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -171,6 +175,11 @@ export default function SettingsPage() {
               </Link>
               <div className="flex items-center gap-2 mt-1 flex-wrap">
                 <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight">WhatsApp Settings</h1>
+                {botName && (
+                  <span className="text-lg font-bold text-teal-700">
+                    · <EditableBotName botId={chatbotId} name={botName} onRenamed={setBotName} inputClassName="text-lg font-bold" />
+                  </span>
+                )}
                 <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-teal-50 text-teal-700 border border-teal-200/60 text-xs font-semibold">
                   <span className={`h-1.5 w-1.5 rounded-full ${connected ? "bg-teal-600 animate-pulse" : "bg-slate-400"}`}></span>
                   {connected ? "Meta Cloud Connected" : "Not connected"}
@@ -238,7 +247,7 @@ export default function SettingsPage() {
                       <input
                         id="business-name"
                         className={inputClass}
-                        placeholder="e.g. PingFlow Store"
+                        placeholder="e.g. Whatsbang Store"
                         value={businessName}
                         onChange={(e) => setBusinessName(e.target.value)}
                       />

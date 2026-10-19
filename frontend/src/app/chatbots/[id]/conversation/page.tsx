@@ -6,6 +6,7 @@ import Link from "next/link";
 import { api } from "@/lib/api";
 import { getToken } from "@/lib/auth";
 import { Sidebar } from "@/app/components/Sidebar";
+import { EditableBotName } from "@/app/components/EditableBotName";
 
 interface Conversation {
   id: string;
@@ -190,7 +191,13 @@ export default function ConversationsPage() {
               <div>
                 <h1 className="text-xl font-extrabold text-slate-900 tracking-tight flex items-center gap-2 flex-wrap">
                   {botName ? (
-                    <span className="text-teal-700">{botName}</span>
+                    <EditableBotName
+                      botId={chatbotId}
+                      name={botName}
+                      onRenamed={setBotName}
+                      className="text-teal-700"
+                      inputClassName="text-lg font-extrabold"
+                    />
                   ) : (
                     "Conversations & Logs"
                   )}

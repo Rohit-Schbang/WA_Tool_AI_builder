@@ -14,6 +14,7 @@ import ReactFlow, {
   type Connection,
   type Edge,
   type Node,
+  type NodeChange,
   type ReactFlowInstance,
 } from "reactflow";
 import "reactflow/dist/style.css";
@@ -22,6 +23,9 @@ import { DeletableEdge } from "./DeletableEdge";
 import { TestPanel } from "./testPanel";
 import { VariableTextInput, VariableSelect, NoReplyFallback } from "./VariableInputs";
 import { layoutGraph } from "./autoLayout";
+import { ensureSingleStart } from "./startNode";
+import { EditableBotName } from "@/app/components/EditableBotName";
+import { ActivityLogPanel } from "./ActivityLogPanel";
 import { useAutoSave, readLocalDraft, clearLocalDraft } from "./useAutoSave";
 import { AiJourneyPanel } from "./AiJourneyPanel";
 
@@ -250,6 +254,15 @@ function BuilderInner() {
   // ---------------------- STATE ----------------------
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
+  // React Flow's built-in Backspace/Delete removal bypasses deleteNode(), so
+  // filter out any "remove" change that targets the START node here.
+  const guardedOnNodesChange = useCallback(
+    (changes: NodeChange[]) => {
+      const startIds = new Set(nodes.filter((n) => n.data?.nodeType === "START").map((n) => n.id));
+      onNodesChange(changes.filter((c) => !(c.type === "remove" && startIds.has(c.id))));
+    },
+    [nodes, onNodesChange]
+  );
   const [publishing, setPublishing] = useState(false);
   const [publishMsg, setPublishMsg] = useState("");
   // Whether the flow has unpublished changes; gates the Publish button. This is
@@ -259,6 +272,7 @@ function BuilderInner() {
   const [dirtySincePublish, setDirtySincePublish] = useState(false);
   const publishedBaselineRef = useRef<string>("");
   const [isActive, setIsActive] = useState(false);
+  const [botName, setBotName] = useState("");
   const [activating, setActivating] = useState(false);
   const [publishErrors, setPublishErrors] = useState<{ message: string; nodeId?: string }[]>([]);
   const [seqCounter, setSeqCounter] = useState(1);
@@ -294,6 +308,11 @@ function BuilderInner() {
   const [apiCfgSearch, setApiCfgSearch] = useState("");
   const [revealedHeaders, setRevealedHeaders] = useState<Record<string, boolean>>({});
 
+  // Floating bottom-right widgets (test chat / AI generator) — coordinated so
+  // they never overlap.
+  const [testPanelOpen, setTestPanelOpen] = useState(false);
+  const [aiPanelOpen, setAiPanelOpen] = useState(false);
+
   // #11 — pending "restore unsaved local changes?" prompt (styled modal).
   // Holds the local + server definitions and a savedAt timestamp until the
   // user chooses. null = no prompt showing.
@@ -309,6 +328,7 @@ function BuilderInner() {
     hasUnpublishedChanges: boolean;
   } | null>(null);
   const [showVersions, setShowVersions] = useState(false);
+  const [showActivity, setShowActivity] = useState(false);
   // Read-only preview of an old version shown on the canvas (null = editing).
   const [preview, setPreview] = useState<
     { version: number; isLive: boolean; publishedAt: string | null; definition: any } | null
@@ -469,7 +489,11 @@ function BuilderInner() {
   const autoSave = useAutoSave(chatbotId, buildDefinition, autoReady);
 
   // Hydrate builder state from a definition object (server or local draft).
-  const hydrateDefinition = useCallback((def: any) => {
+  const hydrateDefinition = useCallback((rawDef: any) => {
+    // Every load path (server draft, local restore, version restore, AI
+    // generation) goes through here, so this is where we guarantee the canvas
+    // always has exactly one START node.
+    const def = ensureSingleStart(rawDef ?? { nodes: [], edges: [] });
     const loadedNodes: Node[] = (def.nodes ?? []).map((node: any, i: number) => ({
       id: node.id,
       type: "workflow",
@@ -503,13 +527,21 @@ function BuilderInner() {
   // Apply an AI-generated definition to the canvas: hydrate it (reusing the
   // normal load path), auto-layout into a clean tree, and let autosave pick up
   // the change. The generated flow is a reviewable draft, not auto-published.
-  const applyGeneratedDefinition = useCallback((def: any) => {
+  const applyGeneratedDefinition = useCallback((rawDef: any) => {
+    const def = ensureSingleStart(rawDef);
     hydrateDefinition(def);
     setSelectedId(null);
     // Once the generated nodes/edges are in state, lay them out into a clean
     // tree and fit the view. Read from the def directly so we don't depend on
     // the async state update having flushed yet.
+    // Flows generated from a draw.io file already carry the diagram's layout,
+    // so keep it; otherwise auto-arrange into a clean top-to-bottom tree.
+    const keepLayout = rawDef?.meta?.layout === "drawio";
     setTimeout(() => {
+      if (keepLayout) {
+        rfRef.current?.fitView({ duration: 600, padding: 0.2 });
+        return;
+      }
       setNodes((curNodes) => {
         const laid = layoutGraph(curNodes, def.edges ?? [], "TB");
         setTimeout(() => rfRef.current?.fitView({ duration: 600, padding: 0.2 }), 30);
@@ -953,6 +985,28 @@ function BuilderInner() {
   function addApiConfig() {
     setApiConfigs((cs) => [...cs, { name: `api${cs.length + 1}`, baseUrl: "", headers: [] }]);
   }
+
+  // Inline "Create" form inside the API node panel: adds a config (and an
+  // optional first endpoint) to this bot and selects it on the node.
+  const [quickApi, setQuickApi] = useState<
+    { name: string; baseUrl: string; method: string; path: string; error: string } | null
+  >(null);
+  function createQuickApiConfig() {
+    if (!quickApi) return;
+    const name = quickApi.name.trim();
+    const baseUrl = quickApi.baseUrl.trim();
+    if (!name) return setQuickApi({ ...quickApi, error: "Give the config a name." });
+    if (apiConfigs.some((c) => c.name === name)) return setQuickApi({ ...quickApi, error: "A config with this name already exists." });
+    if (!/^https?:\/\//i.test(baseUrl)) return setQuickApi({ ...quickApi, error: "Base URL must start with http:// or https://" });
+    const path = quickApi.path.trim();
+    const endpoint: ApiEndpoint | null = path
+      ? { id: "ep_" + Math.random().toString(36).slice(2, 8), name: `${quickApi.method} ${path}`, method: quickApi.method, path, body: "" }
+      : null;
+    setApiConfigs((cs) => [...cs, { name, baseUrl, headers: [], ...(endpoint ? { endpoints: [endpoint] } : {}) }]);
+    updateConfig("apiConfig", name);
+    updateConfig("endpointId", endpoint?.id ?? "");
+    setQuickApi(null);
+  }
   function updateApiConfig(idx: number, patch: Partial<ApiConfig>) {
     setApiConfigs((cs) => cs.map((c, i) => (i === idx ? { ...c, ...patch } : c)));
   }
@@ -1071,6 +1125,8 @@ function BuilderInner() {
       };
       return {
         ...n,
+        // START can never be deleted (keyboard included).
+        ...(n.data.nodeType === "START" ? { deletable: false } : {}),
         position: safePosition,
         data: {
           ...n.data,
@@ -1185,7 +1241,7 @@ function BuilderInner() {
       }
 
       api.get(`/api/chatbots/${chatbotId}`)
-        .then((res) => setIsActive(res.data.isActive))
+        .then((res) => { setIsActive(res.data.isActive); setBotName(res.data.name ?? ""); })
         .catch(() => { });
 
       // #11 — recover a local draft only if it MEANINGFULLY differs from the
@@ -1316,9 +1372,21 @@ function BuilderInner() {
           <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-brand-600 to-teal-400 flex items-center justify-center text-white shadow-xs">
             <i className="ph-bold ph-chat-teardrop-dots text-base" />
           </div>
-          <span className="font-extrabold text-slate-900 tracking-tight text-sm">PingFlow</span>
+          <span className="font-extrabold text-slate-900 tracking-tight text-sm">Whatsbang</span>
           <span className="text-[9px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-brand-50 text-brand-700 border border-brand-200">Cloud</span>
           <span className="text-xs font-semibold text-slate-500 ml-2 hidden md:inline">Flow Builder</span>
+          {botName && (
+            <>
+              <span className="text-slate-300 hidden md:inline">/</span>
+              <EditableBotName
+                botId={chatbotId}
+                name={botName}
+                onRenamed={setBotName}
+                className="text-sm font-bold text-slate-900 max-w-[16rem] truncate"
+                inputClassName="text-sm font-bold"
+              />
+            </>
+          )}
         </div>
 
         <div className="flex items-center space-x-2.5 shrink-0">
@@ -1622,7 +1690,7 @@ function BuilderInner() {
           <ReactFlow
             nodes={previewGraph ? previewGraph.nodes : nodesForFlow}
             edges={previewGraph ? previewGraph.edges : edgesForFlow}
-            onNodesChange={previewGraph ? undefined : onNodesChange}
+            onNodesChange={previewGraph ? undefined : guardedOnNodesChange}
             onEdgesChange={previewGraph ? undefined : onEdgesChange}
             onConnect={previewGraph ? undefined : onConnect}
             onConnectStart={previewGraph ? undefined : onConnectStart}
@@ -2680,29 +2748,94 @@ function BuilderInner() {
                 {/* Global-config-only: every API request must go through a
                     saved global API config. Inline URL/method/headers/body are
                     no longer editable here — define them once in API Configs. */}
-                {apiConfigs.length === 0 ? (
-                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 flex flex-col gap-2">
-                    <div className="flex items-center gap-1.5 font-semibold">
-                      <i className="ph-bold ph-plug" /> No global API configs yet
-                    </div>
-                    <p className="leading-relaxed">
-                      API requests must use a saved global API config. Create one in{" "}
-                      <span className="font-semibold">API Configs</span> (top toolbar), then select it here.
-                    </p>
+                {/* Config picker: reuse one of this bot's API configs, or
+                    create a new one right here. */}
+                <div className="form-control">
+                  <span className="label-text">API config <span className="text-error">*</span></span>
+                  <div className="flex gap-1.5">
+                    <select
+                      className="select select-bordered select-sm flex-1"
+                      value={selectedNode.data.config.apiConfig ?? ""}
+                      onChange={(e) => { updateConfig("apiConfig", e.target.value); updateConfig("endpointId", ""); }}
+                      disabled={apiConfigs.length === 0}
+                      aria-label="Select an existing API config"
+                    >
+                      <option value="">{apiConfigs.length ? "Select a config…" : "No configs yet"}</option>
+                      {apiConfigs.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => setQuickApi({ name: `api${apiConfigs.length + 1}`, baseUrl: "", method: "GET", path: "", error: "" })}
+                      className="px-2.5 rounded-lg bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold flex items-center gap-1 shrink-0"
+                      title="Create a new API config"
+                    >
+                      <i className="ph-bold ph-plus" /> Create
+                    </button>
                   </div>
-                ) : (
-                  <>
+                  <button
+                    type="button"
+                    onClick={() => setShowApiCfg(true)}
+                    className="self-start text-[11px] text-teal-700 hover:underline mt-0.5"
+                  >
+                    Manage configs (headers, endpoints)…
+                  </button>
+                </div>
+
+                {quickApi && (
+                  <div className="rounded-lg border border-teal-200 bg-teal-50/60 p-3 flex flex-col gap-2">
+                    <div className="text-xs font-semibold text-teal-800 flex items-center gap-1.5">
+                      <i className="ph-bold ph-plugs-connected" /> New API config
+                    </div>
                     <label className="form-control">
-                      <span className="label-text">Global API config <span className="text-error">*</span></span>
-                      <select
-                        className="select select-bordered select-sm"
-                        value={selectedNode.data.config.apiConfig ?? ""}
-                        onChange={(e) => { updateConfig("apiConfig", e.target.value); updateConfig("endpointId", ""); }}
-                      >
-                        <option value="">Select a config…</option>
-                        {apiConfigs.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
-                      </select>
+                      <span className="label-text">Name</span>
+                      <input
+                        className="input input-bordered input-sm"
+                        value={quickApi.name}
+                        onChange={(e) => setQuickApi({ ...quickApi, name: e.target.value, error: "" })}
+                      />
                     </label>
+                    <label className="form-control">
+                      <span className="label-text">Base URL</span>
+                      <input
+                        className="input input-bordered input-sm"
+                        placeholder="https://api.example.com"
+                        value={quickApi.baseUrl}
+                        onChange={(e) => setQuickApi({ ...quickApi, baseUrl: e.target.value, error: "" })}
+                      />
+                    </label>
+                    <div className="flex gap-1.5">
+                      <label className="form-control w-24">
+                        <span className="label-text">Method</span>
+                        <select
+                          className="select select-bordered select-sm"
+                          value={quickApi.method}
+                          onChange={(e) => setQuickApi({ ...quickApi, method: e.target.value })}
+                        >
+                          {["GET", "POST", "PUT", "PATCH", "DELETE"].map((m) => <option key={m} value={m}>{m}</option>)}
+                        </select>
+                      </label>
+                      <label className="form-control flex-1">
+                        <span className="label-text">Endpoint path <span className="text-slate-400 font-normal">(optional)</span></span>
+                        <input
+                          className="input input-bordered input-sm"
+                          placeholder="/users/{{id}}"
+                          value={quickApi.path}
+                          onChange={(e) => setQuickApi({ ...quickApi, path: e.target.value })}
+                        />
+                      </label>
+                    </div>
+                    {quickApi.error && <p role="alert" className="text-[11px] text-rose-600">{quickApi.error}</p>}
+                    <div className="flex justify-end gap-1.5">
+                      <button type="button" onClick={() => setQuickApi(null)} className="btn btn-xs btn-ghost">Cancel</button>
+                      <button type="button" onClick={createQuickApiConfig} className="btn btn-xs bg-teal-600 hover:bg-teal-700 text-white border-0">
+                        Create &amp; use
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {apiConfigs.length > 0 && (
+                  <>
 
                     {/* Endpoint picker — required when the chosen config defines endpoints. */}
                     {(() => {
@@ -2940,7 +3073,14 @@ function BuilderInner() {
       </div>
       {/* end workspace row */}
 
-      <TestPanel chatbotId={chatbotId} beforeSend={autoSave.syncNow} />
+      {/* The test chat and the AI generator both float bottom-right; while one
+          is open, the other's launcher is hidden so they never overlap. */}
+      <TestPanel
+        chatbotId={chatbotId}
+        beforeSend={autoSave.syncNow}
+        hideLauncher={aiPanelOpen}
+        onOpenChange={setTestPanelOpen}
+      />
 
       {/* AI journey generator — create new, or edit (regenerate) the canvas */}
       <AiJourneyPanel
@@ -2948,7 +3088,12 @@ function BuilderInner() {
         onApply={applyGeneratedDefinition}
         hasExistingNodes={nodes.filter((n) => n.data.nodeType !== "START").length > 0}
         getCurrentDefinition={buildDefinition}
+        hideLauncher={testPanelOpen}
+        onOpenChange={setAiPanelOpen}
+        onFocusNode={focusNode}
       />
+
+      {showActivity && <ActivityLogPanel chatbotId={chatbotId} onClose={() => setShowActivity(false)} />}
 
       {/* Versions panel — published history with preview / make live / restore */}
       {showVersions && (
@@ -2973,13 +3118,22 @@ function BuilderInner() {
                   <p className="text-xs text-slate-500 mt-0.5">Each publish creates a new version. Preview, restore, or roll back any time.</p>
                 </div>
               </div>
-              <button
-                onClick={() => setShowVersions(false)}
-                className="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-400 hover:text-slate-700 transition"
-                aria-label="Close version history"
-              >
-                <i className="ph-bold ph-x text-sm" />
-              </button>
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => setShowActivity(true)}
+                  className="px-2.5 h-8 rounded-lg border border-slate-200 text-xs font-semibold text-slate-600 hover:text-teal-700 hover:border-teal-300 flex items-center gap-1.5 transition"
+                  title="User activity log (requires access key)"
+                >
+                  <i className="ph-bold ph-list-magnifying-glass text-sm" /> Activity
+                </button>
+                <button
+                  onClick={() => setShowVersions(false)}
+                  className="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-400 hover:text-slate-700 transition"
+                  aria-label="Close version history"
+                >
+                  <i className="ph-bold ph-x text-sm" />
+                </button>
+              </div>
             </div>
 
             {versionsInfo?.hasUnpublishedChanges && (

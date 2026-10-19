@@ -1,7 +1,8 @@
 "use client";
 
 import { api } from "@/lib/api";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { FidelityReport, type FidelityReportData } from "./FidelityReport";
 
 // AI Journey Generator panel — a floating side chat on the builder canvas.
 // Two-phase, agentic: the user describes the journey (and optionally attaches a
@@ -14,7 +15,12 @@ interface GeneratedDefinition {
   nodes: any[];
   edges: any[];
 }
-interface PlanStage { step: number; title: string; nodeType: string; detail: string }
+interface PlanStage { step: number; title: string; nodeType: string; detail: string; sourceId?: string; sourceIds?: string[] }
+interface DiagramSummary { shapes: number; connections: number; pages: number; warnings: string[] }
+
+// Mirrors backend DIAGRAM_LIMITS (generator.ts).
+const MAX_DRAWIO_BYTES = 5_000_000;
+const MAX_DRAWIO_STEPS = 150;
 
 type Phase = "input" | "planning" | "review" | "building";
 
@@ -23,13 +29,21 @@ export function AiJourneyPanel({
   onApply,
   hasExistingNodes,
   getCurrentDefinition,
+  hideLauncher = false,
+  onOpenChange,
+  onFocusNode,
 }: {
   chatbotId: string;
   onApply: (def: GeneratedDefinition) => void;
   hasExistingNodes: boolean;
   getCurrentDefinition: () => any;
+  onFocusNode?: (id: string) => void;
+  // Hide the launcher while the test chat is open (both live bottom-right).
+  hideLauncher?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
+  useEffect(() => { onOpenChange?.(open); }, [open, onOpenChange]);
   const [mode, setMode] = useState<"create" | "edit">("create");
   const [phase, setPhase] = useState<Phase>("input");
   const [description, setDescription] = useState("");
@@ -44,11 +58,23 @@ export function AiJourneyPanel({
   const [error, setError] = useState("");
   const [warnings, setWarnings] = useState<string[]>([]);
   const [plan, setPlan] = useState<PlanStage[]>([]);
+  // What the server read from the attached draw.io file (shape/arrow counts).
+  const [diagramInfo, setDiagramInfo] = useState<DiagramSummary | null>(null);
+  // Verification report of the last diagram-based build (kept after reset).
+  const [report, setReport] = useState<FidelityReportData | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
+    // Safety net only — the real limit is the number of steps, which the
+    // server checks after reading the diagram (max 150 per run).
+    if (file.size > MAX_DRAWIO_BYTES) {
+      setError(`This file is ${(file.size / 1_000_000).toFixed(1)} MB; the limit is 5 MB. In draw.io, use File → Save (compressed) or split it into smaller pages.`);
+      if (fileRef.current) fileRef.current.value = "";
+      return;
+    }
+    setError("");
     const reader = new FileReader();
     reader.onload = () => {
       setDrawioXml(String(reader.result ?? ""));
@@ -66,6 +92,8 @@ export function AiJourneyPanel({
   function reset() {
     setPhase("input");
     setPlan([]);
+    setDiagramInfo(null);
+    setReport(null);
     setInstruction("");
     setAnchorNodeId("");
     setWarnings([]);
@@ -128,6 +156,7 @@ export function AiJourneyPanel({
         : { description, drawioXml: drawioXml || undefined, apiConfigs: getCurrentDefinition()?.apiConfigs };
       const res = await api.post(`/api/chatbots/${chatbotId}/workflow/generate-plan`, body);
       const stages: PlanStage[] = res.data?.plan ?? [];
+      setDiagramInfo(res.data?.diagram ?? null);
       if (!stages.length) {
         setError("The AI couldn't produce a plan. Try rephrasing.");
         setPhase("input");
@@ -161,18 +190,29 @@ export function AiJourneyPanel({
           }
         : { description, drawioXml: drawioXml || undefined, plan, apiConfigs: getCurrentDefinition()?.apiConfigs };
       const res = await api.post(`/api/chatbots/${chatbotId}/workflow/generate`, body);
-      const { definition, warnings: warns } = res.data;
+      const { definition, warnings: warns, report: rep } = res.data;
       if (!definition) {
         setError("The AI couldn't build a valid journey from the plan. Try editing the instruction.");
         setPhase("review");
         return;
       }
+      // Diagram builds are verified on the server. Unresolved failures are
+      // never applied silently — the user decides, with the report in view.
+      if (rep?.status === "failed") {
+        const n = (rep.items ?? []).filter((i: any) => i.status === "failed").length;
+        setReport(rep);
+        const ok = window.confirm(
+          `Verification found ${n} unresolved problem(s) compared with your diagram.\n\nApply the journey anyway so you can fix them on the canvas? (See the report for details.)`
+        );
+        if (!ok) { setPhase("review"); return; }
+      }
       onApply(definition); // apply the built/patched definition to the canvas
       const warnList = Array.isArray(warns) ? warns : [];
       // Reset the panel to its default "Create plan" state after a successful
-      // build, but keep any warnings visible for the user to review.
+      // build, but keep warnings + the verification report visible.
       resetAll();
-      setWarnings(warnList);
+      setReport(rep ?? null);
+      setWarnings(rep ? [] : warnList);
     } catch (err: any) {
       setError(err.response?.data?.error ?? "Build failed. Please try again.");
       setPhase("review");
@@ -184,7 +224,7 @@ export function AiJourneyPanel({
   return (
     <>
       {/* Launcher */}
-      {!open && (
+      {!open && !hideLauncher && (
         <button
           type="button"
           onClick={() => setOpen(true)}
@@ -295,6 +335,9 @@ export function AiJourneyPanel({
                 <span className="truncate">{drawioName}</span>
               </div>
             )}
+            <p className="text-[11px] text-slate-400">
+              .drawio or .xml, up to 5 MB and {MAX_DRAWIO_STEPS} steps per run. Large journeys work best split into one page per part.
+            </p>
             <input ref={fileRef} type="file" accept=".drawio,.xml,text/xml,application/xml" className="hidden" onChange={onPickFile} />
             </>
             )}
@@ -302,6 +345,13 @@ export function AiJourneyPanel({
             {/* Shared status/plan display (both create & edit modes) */}
             {error && (
               <div className="text-xs text-rose-600 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">{error}</div>
+            )}
+
+            {phase === "building" && diagramInfo && (
+              <div className="text-xs text-teal-700 bg-teal-50 border border-teal-200 rounded-lg px-3 py-2 flex items-center gap-2" role="status">
+                <i className="ph ph-spinner animate-spin" aria-hidden="true" />
+                Building {diagramInfo.shapes} steps{diagramInfo.shapes > 12 ? ` in ${Math.ceil(diagramInfo.shapes / 12)} parts` : ""}, then verifying against your diagram — larger diagrams can take a few minutes.
+              </div>
             )}
 
             {phase === "planning" && (
@@ -316,11 +366,21 @@ export function AiJourneyPanel({
                 <div className="flex items-center gap-1.5 text-xs font-semibold text-teal-800 mb-2">
                   <i className="ph-fill ph-list-checks" /> Proposed plan ({plan.length} stages)
                 </div>
+                {diagramInfo && (
+                  <div className="mb-2 text-[11px] text-slate-600 bg-white border border-slate-200 rounded-md px-2 py-1.5">
+                    <i className="ph-bold ph-flow-arrow text-teal-700 mr-1" aria-hidden="true" />
+                    Read from your diagram: <b>{diagramInfo.shapes}</b> steps, <b>{diagramInfo.connections}</b> connections
+                    {diagramInfo.pages > 1 ? `, ${diagramInfo.pages} pages` : ""}.
+                    {diagramInfo.warnings.map((w, i) => (
+                      <div key={i} className="text-amber-700 mt-0.5">{w}</div>
+                    ))}
+                  </div>
+                )}
                 <ol className="flex flex-col gap-1.5">
-                  {plan.map((s) => (
-                    <li key={s.step} className="flex items-start gap-2 text-[11px]">
+                  {plan.filter((s) => s.nodeType !== "SKIP").map((s, i) => (
+                    <li key={`${s.step}-${i}`} className="flex items-start gap-2 text-[11px]">
                       <span className="mt-0.5 w-4 h-4 shrink-0 rounded-full bg-teal-200 text-teal-800 flex items-center justify-center text-[9px] font-bold">
-                        {s.step}
+                        {i + 1}
                       </span>
                       <div className="min-w-0">
                         <span className="font-semibold text-slate-700">{s.title}</span>
@@ -330,6 +390,29 @@ export function AiJourneyPanel({
                     </li>
                   ))}
                 </ol>
+                {plan.some((s) => s.nodeType === "SKIP") && (
+                  <div className="mt-2 pt-2 border-t border-teal-200/70">
+                    <div className="text-[11px] font-semibold text-slate-500 mb-1">
+                      Not bot steps (left out): {plan.filter((s) => s.nodeType === "SKIP").length}
+                    </div>
+                    <ul className="flex flex-col gap-0.5">
+                      {plan.filter((s) => s.nodeType === "SKIP").map((s, i) => (
+                        <li key={`skip-${i}`} className="text-[11px] text-slate-400">
+                          <span className="line-through">{s.title}</span> — {s.detail}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {report && phase !== "planning" && phase !== "building" && (
+              <div className="flex flex-col gap-1">
+                <FidelityReport report={report} onFocusNode={onFocusNode} />
+                <button type="button" onClick={() => setReport(null)} className="self-end text-[11px] text-slate-500 hover:text-slate-800">
+                  Dismiss report
+                </button>
               </div>
             )}
 
