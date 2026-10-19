@@ -19,6 +19,8 @@ import {
 import { handleInboundMessage } from "../conversations/service.js";
 import { ConsoleAdapter } from "../messaging/adapters.js";
 import { generateJourney, planOnly, makeEditContext } from "./generator.js";
+import { logActivity } from "../activity/service.js";
+import { ensureSingleStart } from "./startNode.js";
 
 export const workflowsRouter = Router({ mergeParams: true });
 
@@ -38,7 +40,7 @@ workflowsRouter.get("/draft", async (req: Request, res: Response) => {
 
   const chatbotId = req.params.chatbotId;
 
-  const bot = await getChatbot(req.userId!, chatbotId)
+  const bot = await getChatbot(chatbotId)
   if (!bot) return res.status(404).json({ error: "Chatbot not found" })                  // Checking if BOT present first, before cheking the draft
 
   const draft = await getDraft(chatbotId)
@@ -52,13 +54,17 @@ workflowsRouter.get("/draft", async (req: Request, res: Response) => {
 workflowsRouter.put("/draft", async (req: Request, res: Response) => {
   const chatbotId = req.params.chatbotId;
 
-  const bot = await getChatbot(req.userId!, chatbotId);
+  const bot = await getChatbot(chatbotId);
   if (!bot) return res.status(404).json({ error: "Chatbot not found" });
 
   const parsed = draftSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "Invalid workflow", details: parsed.error.flatten() });
 
-  const saved = await saveDraft(chatbotId, parsed.data.definition as Prisma.InputJsonValue);
+  // Guarantee exactly one START node so a corrupted/edited client copy can
+  // never persist a flow without an entry point.
+  const definition = ensureSingleStart(parsed.data.definition);
+  const saved = await saveDraft(chatbotId, definition as Prisma.InputJsonValue);
+  logActivity(req, "workflow.save", { chatbotId, version: 0, details: { nodes: definition.nodes.length } });
   return res.json(saved);
 });
 
@@ -67,13 +73,14 @@ workflowsRouter.post("/publish", async (req: Request, res: Response) => {
 
   const chatbotId = req.params.chatbotId
 
-  const bot = await getChatbot(req.userId!, chatbotId);
+  const bot = await getChatbot(chatbotId);
   if (!bot) return res.status(404).json({ error: "Chatbot not found" })
 
   const result = await publishDraft(chatbotId)
   // 422 - request was understood but the workflow is invalid
   if (!result.ok) return res.status(422).json({ error: "Workflow is not valid", details: result.errors })
 
+  logActivity(req, "workflow.publish", { chatbotId, version: result.version })
   return res.json({ published: true, version: result.version })
 
 })
@@ -86,7 +93,7 @@ workflowsRouter.post("/publish", async (req: Request, res: Response) => {
 // GET ---------->>>>          api/chatbots/:chatbotId/workflow/versions
 workflowsRouter.get("/versions", async (req: Request, res: Response) => {
   const chatbotId = req.params.chatbotId;
-  const bot = await getChatbot(req.userId!, chatbotId);
+  const bot = await getChatbot(chatbotId);
   if (!bot) return res.status(404).json({ error: "Chatbot not found" });
 
   return res.json(await listVersions(chatbotId));
@@ -96,7 +103,7 @@ workflowsRouter.get("/versions", async (req: Request, res: Response) => {
 // Full definition of one published version (read-only preview).
 workflowsRouter.get("/versions/:version", async (req: Request, res: Response) => {
   const chatbotId = req.params.chatbotId;
-  const bot = await getChatbot(req.userId!, chatbotId);
+  const bot = await getChatbot(chatbotId);
   if (!bot) return res.status(404).json({ error: "Chatbot not found" });
 
   const row = await getPublishedVersion(chatbotId, Number(req.params.version));
@@ -114,12 +121,13 @@ workflowsRouter.get("/versions/:version", async (req: Request, res: Response) =>
 // "Make live": the bot immediately starts running this version.
 workflowsRouter.post("/versions/:version/activate", async (req: Request, res: Response) => {
   const chatbotId = req.params.chatbotId;
-  const bot = await getChatbot(req.userId!, chatbotId);
+  const bot = await getChatbot(chatbotId);
   if (!bot) return res.status(404).json({ error: "Chatbot not found" });
 
   const row = await activateVersion(chatbotId, Number(req.params.version));
   if (!row) return res.status(404).json({ error: "Version not found" });
 
+  logActivity(req, "workflow.activate_version", { chatbotId, version: row.version });
   return res.json({ ok: true, liveVersion: row.version });
 });
 
@@ -127,12 +135,13 @@ workflowsRouter.post("/versions/:version/activate", async (req: Request, res: Re
 // "Restore to editor": copy this version into the draft (canvas).
 workflowsRouter.post("/versions/:version/restore", async (req: Request, res: Response) => {
   const chatbotId = req.params.chatbotId;
-  const bot = await getChatbot(req.userId!, chatbotId);
+  const bot = await getChatbot(chatbotId);
   if (!bot) return res.status(404).json({ error: "Chatbot not found" });
 
   const draft = await restoreVersionToDraft(chatbotId, Number(req.params.version));
   if (!draft) return res.status(404).json({ error: "Version not found" });
 
+  logActivity(req, "workflow.restore_version", { chatbotId, version: Number(req.params.version) });
   return res.json({ ok: true, definition: draft.definition });
 });
 
@@ -143,7 +152,7 @@ workflowsRouter.post("/versions/:version/restore", async (req: Request, res: Res
 // (green); only network errors / timeouts = unreachable (red).
 workflowsRouter.post("/ping", async (req: Request, res: Response) => {
   const chatbotId = req.params.chatbotId;
-  const bot = await getChatbot(req.userId!, chatbotId);
+  const bot = await getChatbot(chatbotId);
   if (!bot) return res.status(404).json({ error: "Chatbot not found" });
 
   const { url, headers } = req.body ?? {};
@@ -181,7 +190,9 @@ workflowsRouter.post("/ping", async (req: Request, res: Response) => {
 // workflow definition the frontend can drop onto the canvas. Does NOT save it.
 const generateSchema = z.object({
   description: z.string().max(8000).optional().default(""),
-  drawioXml: z.string().max(200000).optional(),
+  // Uncompressed draw.io files can be large; the file is parsed in code, so a
+  // generous limit is fine (the request body limit is set in app.ts).
+  drawioXml: z.string().max(5_000_000).optional(),
   // When present, this is the user-APPROVED plan — build straight from it
   // (skip the planning step). Omit it to just get a plan back for review.
   plan: z.array(z.object({
@@ -189,6 +200,8 @@ const generateSchema = z.object({
     title: z.string().optional(),
     nodeType: z.string().optional(),
     detail: z.string().optional(),
+    sourceId: z.string().optional(),           // node id this stage becomes
+    sourceIds: z.array(z.string()).optional(), // diagram shapes it represents
   })).optional(),
   // EDIT mode: when both are present, the journey is REGENERATED from the
   // existing flow + this instruction (create-new-from-original, not a patch).
@@ -215,12 +228,14 @@ const aiErrorMessage = (err: any) =>
     ? "AI is not configured on the server (missing Gemini key)."
     : /RESOURCE_EXHAUSTED|prepayment|402/i.test(String(err?.message))
       ? "The AI account is out of credits. Please top up the Gemini billing."
-      : "Failed to generate. Please try again or rephrase.";
+      : /AI_OUTPUT_TRUNCATED/.test(String(err?.message))
+        ? "This flow is too large to generate in one go. Try splitting the diagram into smaller pages."
+        : "Failed to generate. Please try again or rephrase.";
 
 // STEP 1 — PLAN ONLY. Returns the ordered stages for the user to review;
 // does NOT build or touch the canvas.
 workflowsRouter.post("/generate-plan", async (req: Request, res: Response) => {
-  const bot = await getChatbot(req.userId!, req.params.chatbotId);
+  const bot = await getChatbot(req.params.chatbotId);
   if (!bot) return res.status(404).json({ error: "Chatbot not found" });
 
   const parsed = generateSchema.safeParse(req.body);
@@ -236,9 +251,14 @@ workflowsRouter.post("/generate-plan", async (req: Request, res: Response) => {
 
   try {
     const editCtx = isEdit ? makeEditContext(currentDefinition, editInstruction!, anchorNodeId) : undefined;
-    const plan = await planOnly(description, drawioXml, editCtx, configs);
-    return res.json({ plan });
+    const { plan, diagram } = await planOnly(description, drawioXml, editCtx, configs);
+    return res.json({ plan, diagram });
   } catch (err: any) {
+    if (String(err?.message) === "DIAGRAM_UNREADABLE") {
+      return res.status(422).json({
+        error: "Couldn't read any shapes from this draw.io file. In draw.io use File → Export as → XML (or save as .drawio) and try again.",
+      });
+    }
     console.error("Journey plan error:", err?.message ?? err);
     return res.status(502).json({ error: aiErrorMessage(err) });
   }
@@ -247,7 +267,7 @@ workflowsRouter.post("/generate-plan", async (req: Request, res: Response) => {
 // STEP 2 — BUILD. Uses the approved plan (if provided) to build the workflow.
 workflowsRouter.post("/generate", async (req: Request, res: Response) => {
   const chatbotId = req.params.chatbotId;
-  const bot = await getChatbot(req.userId!, chatbotId);
+  const bot = await getChatbot(chatbotId);
   if (!bot) return res.status(404).json({ error: "Chatbot not found" });
 
   const parsed = generateSchema.safeParse(req.body);
@@ -263,11 +283,16 @@ workflowsRouter.post("/generate", async (req: Request, res: Response) => {
   try {
     const editCtx = isEdit ? makeEditContext(currentDefinition, editInstruction!, anchorNodeId) : undefined;
     const result = await generateJourney(description, drawioXml, plan as any, editCtx, configs);
+    const definition = result.definition ? ensureSingleStart(result.definition as any) : null;
+    logActivity(req, "workflow.ai_generate", {
+      chatbotId,
+      details: { mode: isEdit ? "edit" : "create", nodes: definition?.nodes.length ?? 0, usedDrawio: !!drawioXml },
+    });
     return res.json({
       ok: result.ok,
-      definition: result.definition ?? null,
+      definition,
       plan: result.plan ?? [],
-      warnings: result.errors ?? [],
+      warnings: [...(result.errors ?? []), ...(result.warnings ?? [])],
     });
   } catch (err: any) {
     console.error("Journey generation error:", err?.message ?? err);
@@ -280,7 +305,7 @@ workflowsRouter.post("/generate", async (req: Request, res: Response) => {
 workflowsRouter.post("/test", async (req: Request, res: Response) => {
   const chatbotId = req.params.chatbotId;
 
-  const bot = await getChatbot(req.userId!, chatbotId);
+  const bot = await getChatbot(chatbotId);
   if (!bot) return res.status(404).json({ error: "Chatbot not found" });
 
   const { message, testUserId } = req.body ?? {};

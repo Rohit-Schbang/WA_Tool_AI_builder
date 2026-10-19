@@ -2,6 +2,8 @@
 import { Request, Response, Router } from "express";
 import { z } from "zod";
 import { getChatbot } from "../../chatbots/service.js";
+import { requireAuth } from "../../auth/middleware.js";
+import { logActivity } from "../../activity/service.js";
 import { getConnection, ToSafeConnection, upsertConnection, type ConnectionInput } from "./service.js";
 import { config } from "../../../infra/config.js";
 import { completeEmbeddedSignup, isEmbeddedSignupConfigured, EmbeddedSignupError, getConnectionHealth, verifyManualCredentials } from "./embeddedSignup.js";
@@ -12,6 +14,10 @@ export const whatsappRouter = Router();
 //  when we mount it under /api/chatbots/:chatbotId/connection
 
 export const connectionRouter = Router({ mergeParams: true })
+
+// SECURITY: every connection route reads/writes WhatsApp credentials, so it
+// must require a signed-in user (previously missing — the routes were open).
+connectionRouter.use(requireAuth)
 
 // Client may sent the optional updates 
 
@@ -34,7 +40,7 @@ connectionRouter.get("/", async (req: Request, res: Response) => {
 
   // getting chatbot of the current user ownership ----------->>>>>
 
-  const bot = await getChatbot(req.userId!!, chatbotId)
+  const bot = await getChatbot(chatbotId)
 
   if (!bot) return res.status(404).json({ error: "Chatbot not found" })
 
@@ -54,7 +60,7 @@ connectionRouter.put("/", async (req: Request, res: Response) => {
 
   const chatbotId = req.params.chatbotId
 
-  const bot = await getChatbot(req.userId!!, chatbotId)
+  const bot = await getChatbot(chatbotId)
 
   if (!bot) return res.status(404).json({ error: "Chatbot not found" })
 
@@ -92,6 +98,11 @@ connectionRouter.put("/", async (req: Request, res: Response) => {
   }
 
   const conn = await upsertConnection(chatbotId, data)
+  // Log WHICH fields changed (never the secret values themselves).
+  logActivity(req, "connection.update", {
+    chatbotId,
+    details: { fields: Object.keys(parsed.data).filter((k) => (parsed.data as any)[k] !== undefined), status: conn.status },
+  })
   return res.json({ ...ToSafeConnection(conn), verifyMessage })
 
 
@@ -103,7 +114,7 @@ connectionRouter.put("/", async (req: Request, res: Response) => {
 // the app secret). `enabled` tells the UI whether to show the "Connect with
 // Facebook" button or fall back to manual entry.
 connectionRouter.get("/meta-config", async (req: Request, res: Response) => {
-  const bot = await getChatbot(req.userId!!, req.params.chatbotId)
+  const bot = await getChatbot(req.params.chatbotId)
   if (!bot) return res.status(404).json({ error: "Chatbot not found" })
 
   return res.json({
@@ -120,7 +131,7 @@ connectionRouter.get("/meta-config", async (req: Request, res: Response) => {
 // name). Fetches fresh values from Meta and caches them; falls back to the
 // last-known snapshot if Meta is unreachable. Never returns secrets.
 connectionRouter.get("/health", async (req: Request, res: Response) => {
-  const bot = await getChatbot(req.userId!!, req.params.chatbotId)
+  const bot = await getChatbot(req.params.chatbotId)
   if (!bot) return res.status(404).json({ error: "Chatbot not found" })
 
   const health = await getConnectionHealth(req.params.chatbotId)
@@ -140,7 +151,7 @@ const embeddedSignupSchema = z.object({
 
 connectionRouter.post("/embedded-signup", async (req: Request, res: Response) => {
   const chatbotId = req.params.chatbotId
-  const bot = await getChatbot(req.userId!!, chatbotId)
+  const bot = await getChatbot(chatbotId)
   if (!bot) return res.status(404).json({ error: "Chatbot not found" })
 
   const parsed = embeddedSignupSchema.safeParse(req.body)
@@ -148,6 +159,7 @@ connectionRouter.post("/embedded-signup", async (req: Request, res: Response) =>
 
   try {
     const conn = await completeEmbeddedSignup(chatbotId, parsed.data)
+    logActivity(req, "connection.embedded_signup", { chatbotId, details: { phoneNumber: conn.phoneNumber } })
     return res.json(ToSafeConnection(conn))
   } catch (err) {
     if (err instanceof EmbeddedSignupError) {

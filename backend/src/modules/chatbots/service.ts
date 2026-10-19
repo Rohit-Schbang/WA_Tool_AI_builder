@@ -1,77 +1,41 @@
 import { prisma } from "../../infra/prisma.js"
 
-// ------------------>> Creation of chatbot for a User <<---------------------
-export async function createChatbot(ownerId: string, name: string) {
+// Chatbots are GLOBAL: any signed-in (allowed-domain) user can see and manage
+// every bot. `ownerId` is kept only as "created by" for history.
 
+// ------------------>> Creation of chatbot <<---------------------
+export async function createChatbot(createdById: string, name: string) {
     return prisma.chatbot.create({
-        data: { name, ownerId }
+        data: { name, ownerId: createdById }
     })
-
 }
 
-// ------------------>> GET  all chatbots list  <<---------------------
-export async function listChatbots(ownerId: string) {
-    return prisma.chatbot.findMany(
-        {
-            where: {
-                ownerId
-            }, orderBy: {
-                createdAt: "desc"
-            }
-        }
-    )
+// ------------------>> GET  all chatbots  <<---------------------
+export async function listChatbots() {
+    return prisma.chatbot.findMany({ orderBy: { createdAt: "desc" } })
 }
 
-// ------------->> Returns the chosen BOT  <<----------------
-export async function getChatbot(ownerId: string, id: string) {
-    return prisma.chatbot.findFirst({
-        where: {
-            id, ownerId
-        }
-    })
+// ------------->> Returns the chosen BOT (or null)  <<----------------
+export async function getChatbot(id: string) {
+    return prisma.chatbot.findUnique({ where: { id } })
 }
 
 // ------------------>> Rename the chatbot <<---------------------
-export async function renameChatBot(ownerId: string, id: string, name: string) {
-    const result = await prisma.chatbot.updateMany({
-        where: {
-            id, ownerId
-        }, data: {
-            name
-        }
-    })
-
-    // If no Chatbot present --> returns 'null'
-
+export async function renameChatBot(id: string, name: string) {
+    const result = await prisma.chatbot.updateMany({ where: { id }, data: { name } })
     if (result.count === 0) return null
-    return getChatbot(ownerId, id)
+    return getChatbot(id)
 }
 
 // ------------------>> ACTIVATE /DEACTIVATE the chatbot <<---------------------
-export async function setChatbotActivate(ownerId: string, id: string, isActive: boolean) {
-
-    const result = await prisma.chatbot.updateMany({
-        where: {
-            id, ownerId
-        }, data: {
-            isActive
-        }
-    })
-
+export async function setChatbotActivate(id: string, isActive: boolean) {
+    const result = await prisma.chatbot.updateMany({ where: { id }, data: { isActive } })
     if (result.count === 0) return null
-    return getChatbot(ownerId, id)
-
-
+    return getChatbot(id)
 }
 
 // ------------------>> Deletion of  chatbot <<-------------------
-export async function deleteChatBot(ownerId: string, id: string): Promise<boolean> {
-
-    const result = await prisma.chatbot.deleteMany({
-        where: {
-            ownerId, id
-        }
-    })
+export async function deleteChatBot(id: string): Promise<boolean> {
+    const result = await prisma.chatbot.deleteMany({ where: { id } })
     return result.count > 0
-
 }

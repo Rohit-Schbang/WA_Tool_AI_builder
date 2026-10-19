@@ -44,7 +44,10 @@ export async function generateAiReply(prompt: string): Promise<string> {
 // Ask Gemini for a JSON response (used by the AI journey generator). Uses the
 // model's JSON response mode so we get parseable output, and strips any
 // stray code fences before parsing.
-export async function generateJson(prompt: string): Promise<any> {
+export async function generateJson(
+    prompt: string,
+    opts: { temperature?: number; maxOutputTokens?: number } = {}
+): Promise<any> {
     if (!config.GEMINI_API_KEY) throw new Error("AI API Key is not configured");
 
     const model = "gemini-3.8-flash";
@@ -59,7 +62,13 @@ export async function generateJson(prompt: string): Promise<any> {
         },
         body: JSON.stringify({
             contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { responseMimeType: "application/json", temperature: 0.4 },
+            generationConfig: {
+                responseMimeType: "application/json",
+                temperature: opts.temperature ?? 0.4,
+                // Large diagrams produce large workflows; without an explicit
+                // limit the default can cut the JSON off mid-way.
+                maxOutputTokens: opts.maxOutputTokens ?? 32768,
+            },
         }),
     });
 
@@ -69,7 +78,14 @@ export async function generateJson(prompt: string): Promise<any> {
     }
 
     const data = await response.json();
-    let text: string | undefined = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    const candidate = data?.candidates?.[0];
+    if (candidate?.finishReason === "MAX_TOKENS") {
+        throw new Error("AI_OUTPUT_TRUNCATED: the generated flow was too long and got cut off");
+    }
+    // Join all text parts (long answers can be split across several).
+    let text: string | undefined = (candidate?.content?.parts ?? [])
+        .map((p: any) => p?.text ?? "")
+        .join("") || undefined;
     if (!text) throw new Error("AI returned no text");
 
     // Strip ```json fences if the model added them despite JSON mode.

@@ -18,7 +18,7 @@ const contactSchema = z.object({
 // GET  / api/ contacts  ----------->>>> All Contacts List for the User
 
 contactsRouter.get("/", async (req: Request, res: Response) => {
-    const contacts = await listContacts(req.userId!)
+    const contacts = await listContacts()
     return res.json(contacts)
 })
 
@@ -49,10 +49,15 @@ contactsRouter.patch("/:id", async (req: Request, res: Response) => {
 
     if (!parsed.success) return res.status(400).json({ "error": "Invalid Input", details: parsed.error.flatten() })
 
-    const contact = await updateContact(req.userId!, req.params.id, parsed.data)
-
-    if (!contact) return res.status(404).json({ "error": "Contact not found" })
-    return res.json(contact)
+    try {
+        const contact = await updateContact(req.params.id, parsed.data)
+        if (!contact) return res.status(404).json({ "error": "Contact not found" })
+        return res.json(contact)
+    } catch (error: any) {
+        if (error.code === "P2002") return res.status(409).json({ error: "A contact with same phone exists" })
+        console.error("Update Contact Error:", error)
+        return res.status(500).json({ error: "Internal Server error" })
+    }
 
 })
 
@@ -60,7 +65,7 @@ contactsRouter.patch("/:id", async (req: Request, res: Response) => {
 
 contactsRouter.delete("/:id", async (req: Request, res: Response) => {
 
-    const deleted = await deleteContact(req.userId!, req.params.id)
+    const deleted = await deleteContact(req.params.id)
     if (!deleted) return res.status(404).json({ error: "Contact not found" })
     return res.status(204).send()
 

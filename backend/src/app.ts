@@ -24,6 +24,7 @@ import { connectionRouter } from "./modules/whatsapp/connection/routes.js";
 import { webhookRouter } from "./modules/whatsapp/webhook/routes.js";
 import { contactsRouter } from "./modules/contacts/routes.js";
 import { apiLimiter } from "./infra/rateLimit.js";
+import { activityRouter } from "./modules/activity/routes.js";
 
 export function createApp() {
   const app = express();
@@ -41,6 +42,8 @@ export function createApp() {
   // (a re-serialized req.body would not byte-match and the check would fail).
   app.use(
     express.json({
+      // Large enough for uncompressed draw.io files sent to the AI generator.
+      limit: "6mb",
       verify: (req: Request & { rawBody?: Buffer }, _res, buf) => {
         req.rawBody = buf;
       },
@@ -76,6 +79,7 @@ export function createApp() {
   app.use("/api/chatbots/:chatbotId/connection", apiLimiter, connectionRouter);
   app.use("/api/whatsapp", webhookRouter);
   app.use("/api/contacts", apiLimiter, contactsRouter);
+  app.use("/api/activity", apiLimiter, activityRouter);
 
   // --- 404 fallback ---
   // Runs if no route above matched.

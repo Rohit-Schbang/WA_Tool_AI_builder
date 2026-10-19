@@ -225,6 +225,25 @@ enum ExecutionStatus {
   FAILED
 }
 
+// ---------------------------------------------------------------------------
+// ActivityLog — who did what, across chatbots and workflow versions.
+// No foreign keys on purpose: entries must survive the bot/user being deleted.
+// Reading it requires the ACTIVITY_LOG_API_KEY (see activity/routes.ts).
+// ---------------------------------------------------------------------------
+model ActivityLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  userEmail String?
+  action    String            // e.g. chatbot.rename, workflow.publish
+  chatbotId String?
+  version   Int?              // workflow version the action relates to, if any
+  details   Json?
+  createdAt DateTime @default(now())
+
+  @@index([chatbotId, createdAt])
+  @@index([createdAt])
+}
+
 model Contact {
   id    String    @id @default(cuid())
   name String 
@@ -238,8 +257,8 @@ model Contact {
   updatedAt DateTime @updatedAt
 
 
-  // A user can't have the same phone number twice .
-  @@unique([ownerId,phone])
+  // Contacts are global (shared workspace); ownerId = "created by".
+  @@unique([phone])
   @@index([ownerId])
 }
 

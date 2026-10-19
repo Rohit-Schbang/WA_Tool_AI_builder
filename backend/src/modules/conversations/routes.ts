@@ -12,7 +12,7 @@ conversationsRouter.use(requireAuth);
 conversationsRouter.get("/", async (req: Request, res: Response) => {
   const chatbotId = req.params.chatbotId;
 
-  const bot = await getChatbot(req.userId!, chatbotId);
+  const bot = await getChatbot(chatbotId);
   if (!bot) return res.status(404).json({ error: "Chatbot not found" });
 
   const conversations = await listConversations(chatbotId);
@@ -23,7 +23,7 @@ conversationsRouter.get("/", async (req: Request, res: Response) => {
 conversationsRouter.get("/:conversationId", async (req: Request, res: Response) => {
   const chatbotId = req.params.chatbotId;
 
-  const bot = await getChatbot(req.userId!, chatbotId);
+  const bot = await getChatbot(chatbotId);
   if (!bot) return res.status(404).json({ error: "Chatbot not found" });
 
   const detail = await getConversationDetail(chatbotId, req.params.conversationId);
