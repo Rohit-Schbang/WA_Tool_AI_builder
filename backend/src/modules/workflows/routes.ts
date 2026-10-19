@@ -18,7 +18,7 @@ import {
 } from "./service.js";
 import { handleInboundMessage } from "../conversations/service.js";
 import { ConsoleAdapter } from "../messaging/adapters.js";
-import { generateJourney, planOnly, makeEditContext } from "./generator.js";
+import { generateJourney, planOnly, makeEditContext, DIAGRAM_LIMITS } from "./generator.js";
 import { logActivity } from "../activity/service.js";
 import { ensureSingleStart } from "./startNode.js";
 
@@ -192,7 +192,7 @@ const generateSchema = z.object({
   description: z.string().max(8000).optional().default(""),
   // Uncompressed draw.io files can be large; the file is parsed in code, so a
   // generous limit is fine (the request body limit is set in app.ts).
-  drawioXml: z.string().max(5_000_000).optional(),
+  drawioXml: z.string().max(5_000_000, "The draw.io file is larger than 5 MB.").optional(),
   // When present, this is the user-APPROVED plan — build straight from it
   // (skip the planning step). Omit it to just get a plan back for review.
   plan: z.array(z.object({
@@ -236,8 +236,22 @@ const aiErrorMessage = (err: any) =>
     : /RESOURCE_EXHAUSTED|prepayment|402/i.test(String(err?.message))
       ? "The AI account is out of credits. Please top up the Gemini billing."
       : /AI_OUTPUT_TRUNCATED/.test(String(err?.message))
-        ? "This flow is too large to generate in one go. Try splitting the diagram into smaller pages."
+        ? "Part of this flow was too long for the AI to write in one go. Try again, or split the diagram into smaller pages."
         : "Failed to generate. Please try again or rephrase.";
+
+// Size-limit errors are the user's to act on (422), not server failures.
+function diagramSizeError(err: any): string | null {
+  const m = String(err?.message ?? "");
+  const tooLarge = m.match(/^DIAGRAM_TOO_LARGE:(\d+)/);
+  if (tooLarge) {
+    return `This diagram has ${tooLarge[1]} steps; the generator supports up to ${DIAGRAM_LIMITS.maxSteps} per run. Split it into separate draw.io pages or files (e.g. one per journey branch) and generate each part.`;
+  }
+  const planTooLarge = m.match(/^PLAN_TOO_LARGE:(\d+)/);
+  if (planTooLarge) {
+    return `The AI couldn't plan all ${planTooLarge[1]} shapes in one go. Split the diagram into smaller pages or files and generate each part.`;
+  }
+  return null;
+}
 
 // STEP 1 — PLAN ONLY. Returns the ordered stages for the user to review;
 // does NOT build or touch the canvas.
@@ -261,6 +275,8 @@ workflowsRouter.post("/generate-plan", async (req: Request, res: Response) => {
     const { plan, diagram } = await planOnly(description, drawioXml, editCtx, configs);
     return res.json({ plan, diagram });
   } catch (err: any) {
+    const sizeMsg = diagramSizeError(err);
+    if (sizeMsg) return res.status(422).json({ error: sizeMsg, code: "DIAGRAM_TOO_LARGE" });
     if (String(err?.message) === "DIAGRAM_UNREADABLE") {
       return res.status(422).json({
         error: "Couldn't read any shapes from this draw.io file. In draw.io use File → Export as → XML (or save as .drawio) and try again.",
@@ -308,6 +324,8 @@ workflowsRouter.post("/generate", async (req: Request, res: Response) => {
       report: result.report ?? null,
     });
   } catch (err: any) {
+    const sizeMsg = diagramSizeError(err);
+    if (sizeMsg) return res.status(422).json({ error: sizeMsg, code: "DIAGRAM_TOO_LARGE" });
     console.error("Journey generation error:", err?.message ?? err);
     return res.status(502).json({ error: aiErrorMessage(err) });
   }

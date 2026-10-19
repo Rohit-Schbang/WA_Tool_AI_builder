@@ -118,7 +118,9 @@ function apiConfigsBlock(apiConfigs?: any[]): string {
 
 // Repair the raw model output into a canvas-ready definition: unique ids,
 // known node types, seq numbers, positions, well-formed edges, exactly one START.
-function repair(raw: any): GeneratedDefinition {
+// `partial` = one batch of a larger flow: don't add/rewire START (other
+// batches contain it); the merged result is repaired again as a whole.
+function repair(raw: any, opts: { partial?: boolean } = {}): GeneratedDefinition {
   const rawNodes: any[] = Array.isArray(raw?.nodes) ? raw.nodes : [];
   const rawEdges: any[] = Array.isArray(raw?.edges) ? raw.edges : [];
   const rawVars: any[] = Array.isArray(raw?.variables) ? raw.variables : [];
@@ -150,7 +152,9 @@ function repair(raw: any): GeneratedDefinition {
   const nodeIds = new Set(nodes.map((n) => n.id));
   const seenEdge = new Set<string>();
   const edges = rawEdges
-    .filter((e) => e && nodeIds.has(String(e.source)) && nodeIds.has(String(e.target)))
+    // In a batch, targets may live in another batch — keep them; the merge
+    // step validates endpoints across the whole flow.
+    .filter((e) => e && nodeIds.has(String(e.source)) && (opts.partial || nodeIds.has(String(e.target))))
     .map((e, i) => ({
       id: e.id != null ? String(e.id) : `e${i + 1}`,
       source: String(e.source),
@@ -174,6 +178,7 @@ function repair(raw: any): GeneratedDefinition {
       default: v.default != null ? String(v.default) : "",
     }));
 
+  if (opts.partial) return { variables, nodes, edges };
   return ensureSingleStart({ variables, nodes, edges }) as GeneratedDefinition;
 }
 
@@ -271,8 +276,36 @@ function loadDiagram(drawioXml?: string): ParsedDiagram | null {
   return parseDrawio(drawioXml);
 }
 
+// ---------------------------------------------------------------------------
+// Size limits.
+//
+// What limits the AI is the number of STEPS, not the file size: one AI reply
+// can only be so long. Building is batched (BUILD_BATCH_SIZE blocks per call),
+// so it scales; the PLAN is one call that must list every shape, so the step
+// count is capped to keep that reply within the model's output limit (~150
+// shapes at ~150 output tokens each ≈ 22k of the 32k-token budget).
+// File size is only a safety net (the request body limit in app.ts / routes).
+// ---------------------------------------------------------------------------
+export const DIAGRAM_LIMITS = {
+  maxSteps: 150,          // non-END shapes per generation
+  recommendedSteps: 80,   // above this, generation gets slow — suggest splitting
+  maxFileBytes: 5_000_000,
+};
+
+function assertDiagramSize(d: ParsedDiagram | null) {
+  if (!d) return;
+  const steps = d.shapes.filter((s) => !s.isEnd).length;
+  if (steps > DIAGRAM_LIMITS.maxSteps) throw new Error(`DIAGRAM_TOO_LARGE:${steps}`);
+}
+
 export function summarizeDiagram(d: ParsedDiagram): DiagramSummary {
-  return { shapes: d.shapes.filter((s) => !s.isEnd).length, connections: d.edges.length, pages: d.pages, warnings: d.warnings };
+  const steps = d.shapes.filter((s) => !s.isEnd).length;
+  const warnings = [...d.warnings];
+  if (steps > DIAGRAM_LIMITS.recommendedSteps) {
+    const batches = Math.ceil(steps / BUILD_BATCH_SIZE);
+    warnings.push(`Large diagram (${steps} steps): building runs in ${batches} parts and can take a few minutes. Splitting it into smaller pages is faster and easier to review.`);
+  }
+  return { shapes: steps, connections: d.edges.length, pages: d.pages, warnings };
 
 }
 
@@ -333,13 +366,21 @@ Produce the plan as ordered stages following the flow. Each stage has:
 - "confidence" and, when not high, "ambiguity"
 Exactly ONE stage has nodeType "START". Every shape id (except END shapes) must appear
 in exactly one stage's sourceIds.
+Keep each "detail" short (one sentence, max ~25 words) — branches are tracked from the
+diagram itself, so don't repeat every connection.
 
 Return STRICT JSON: { "plan": [ { "title": string, "nodeType": string, "sourceIds": string[], "detail": string,
   "text"?: string, "textSource"?: "verbatim"|"written", "variable"?: string, "validationType"?: string,
   "expectedType"?: string, "confidence": "high"|"medium"|"low", "ambiguity"?: string } ] }
 ${description ? `\nExtra context from the user (wording, intent):\n"""\n${description}\n"""\n` : ""}`;
 
-  const raw = await generateJson(p, { temperature: 0.2 });
+  let raw: any;
+  try {
+    raw = await generateJson(p, { temperature: 0.2 });
+  } catch (err) {
+    if (isTruncation(err)) throw new Error(`PLAN_TOO_LARGE:${d.shapes.length}`);
+    throw err;
+  }
   const plan = sanitizePlan(raw);
 
   // Normalise against the diagram: guarantees one START, every shape accounted
@@ -404,18 +445,137 @@ Original user description (for wording of messages etc.):
   return repair(await generateJson(p));
 }
 
-async function buildFromSpec(description: string, spec: FlowSpec, d: ParsedDiagram, apiConfigs?: any[]): Promise<GeneratedDefinition> {
-  const p = `You are an expert WhatsApp chatbot flow builder. The user's draw.io diagram has
-already been analysed into the exact blocks and connections below (user actions,
-system events and notes were merged or removed). Build the workflow JSON.
+// ---------------------------------------------------------------------------
+// Batched building. One AI reply has a hard output limit, so a large diagram
+// can't be written in a single answer. The block list and connections are
+// already fixed by the spec, so each batch only writes the config for a few
+// blocks and the connections leaving them; the batches are merged in code.
+// A batch that still gets cut off is split in half and retried.
+// ---------------------------------------------------------------------------
+export const BUILD_BATCH_SIZE = 12;   // blocks per AI call (~5–8k output tokens)
+const BUILD_CONCURRENCY = 3;          // parallel AI calls
+
+const isTruncation = (err: any) => /AI_OUTPUT_TRUNCATED|invalid JSON/i.test(String(err?.message ?? err));
+
+async function runPool<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+function chunk<T>(list: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < list.length; i += size) out.push(list.slice(i, i + size));
+  return out;
+}
+
+// Merge batch results: one node per id (later batches never override earlier
+// ones unless `replace` is given), edges de-duplicated, variables merged.
+function mergeDefs(base: GeneratedDefinition, parts: GeneratedDefinition[], replaceIds?: Set<string>): GeneratedDefinition {
+  const nodes = new Map(base.nodes.map((n) => [n.id, n]));
+  let edges = base.edges.filter((e) => !replaceIds?.has(e.source));
+  const vars = new Map(base.variables.map((v) => [v.name, v]));
+  for (const p of parts) {
+    for (const n of p.nodes) if (replaceIds?.has(n.id) || !nodes.has(n.id)) nodes.set(n.id, n);
+    edges.push(...p.edges);
+    for (const v of p.variables) if (!vars.has(v.name)) vars.set(v.name, v);
+  }
+  const ids = new Set(nodes.keys());
+  const seen = new Set<string>();
+  edges = edges.filter((e) => {
+    const k = `${e.source}|${e.target}|${e.sourceHandle ?? ""}`;
+    if (!ids.has(e.source) || !ids.has(e.target) || seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  }).map((e, i) => ({ ...e, id: `e_${i + 1}` }));
+  return { variables: [...vars.values()], nodes: [...nodes.values()], edges };
+}
+
+function batchPrompt(
+  description: string,
+  spec: FlowSpec,
+  d: ParsedDiagram,
+  ids: Set<string>,
+  apiConfigs: any[] | undefined,
+  extra = ""
+): string {
+  const total = spec.nodes.length;
+  const index = spec.nodes.map((n) => `${n.id} (${n.nodeType}) "${n.title}"`).join("; ");
+  return `You are an expert WhatsApp chatbot flow builder. The user's draw.io diagram has
+already been analysed into an exact list of ${total} blocks and their connections.
+${ids.size < total ? `The flow is built in parts. In THIS part, create ONLY the ${ids.size} blocks listed under
+BLOCKS TO CREATE and ONLY the connections leaving them. The other blocks are created
+separately — you may connect to them by id, but do NOT output them.` : "Build the workflow JSON."}
 
 ${NODE_CATALOG}
 ${RULES}
 ${apiConfigsBlock(apiConfigs)}
 ${BUILD_RULES}
-${describeSpec(spec, d)}
-${description ? `\nUser's extra context (wording, intent):\n"""\n${description}\n"""\n` : ""}`;
-  return repair(await generateJson(p, { temperature: 0.2 }));
+${describeSpec(spec, d, ids)}
+${ids.size < total ? `\nALL BLOCK IDS IN THE FLOW (reference only): ${index}\n` : ""}
+${description ? `\nUser's extra context (wording, intent):\n"""\n${description}\n"""\n` : ""}${extra}`;
+}
+
+async function buildFromSpec(description: string, spec: FlowSpec, d: ParsedDiagram, apiConfigs?: any[]): Promise<GeneratedDefinition> {
+  const buildIds = async (ids: string[]): Promise<GeneratedDefinition[]> => {
+    try {
+      const raw = await generateJson(batchPrompt(description, spec, d, new Set(ids), apiConfigs), { temperature: 0.2 });
+      return [repair(raw, { partial: true })];
+    } catch (err) {
+      if (isTruncation(err) && ids.length > 1) {
+        console.warn(`[drawio] batch of ${ids.length} was cut off — splitting`);
+        const mid = Math.ceil(ids.length / 2);
+        return [...(await buildIds(ids.slice(0, mid))), ...(await buildIds(ids.slice(mid)))];
+      }
+      throw err;
+    }
+  };
+
+  const batches = chunk(spec.nodes.map((n) => n.id), BUILD_BATCH_SIZE);
+  console.log(`[drawio] building ${spec.nodes.length} blocks in ${batches.length} batch(es)`);
+  const parts = (await runPool(batches, BUILD_CONCURRENCY, buildIds)).flat();
+  const merged = mergeDefs({ variables: [], nodes: [], edges: [] }, parts);
+  return ensureSingleStart(merged) as GeneratedDefinition;
+}
+
+// Diagram-mode repair: re-generate ONLY the blocks with failed checks (and
+// the connections leaving them), in batches, then merge them back. Keeps the
+// prompt and the answer small no matter how big the flow is.
+async function fixBlocks(
+  def: GeneratedDefinition,
+  items: CheckItem[],
+  spec: FlowSpec,
+  d: ParsedDiagram,
+  description: string,
+  apiConfigs?: any[]
+): Promise<GeneratedDefinition> {
+  const failed = items.filter((i) => i.status === "failed");
+  const specIds = new Set(spec.nodes.map((n) => n.id));
+  const affected = new Set(failed.map((i) => i.nodeId).filter((id): id is string => !!id && specIds.has(id)));
+  // Problems not tied to a block (e.g. "exactly one Start") -> repair START.
+  if (failed.some((i) => !i.nodeId)) affected.add(spec.nodes.find((n) => n.nodeType === "START")?.id ?? "start");
+  if (!affected.size) return def;
+
+  const parts = (await runPool(chunk([...affected], BUILD_BATCH_SIZE), BUILD_CONCURRENCY, async (ids) => {
+    const set = new Set(ids);
+    const current = {
+      nodes: def.nodes.filter((n) => set.has(n.id)).map((n) => ({ id: n.id, nodeType: n.nodeType, config: n.config })),
+      edges: def.edges.filter((e) => set.has(e.source)),
+    };
+    const problems = failed.filter((i) => !i.nodeId || set.has(i.nodeId)).map((i) => `[${i.category}] ${i.message}`);
+    const extra = `\nTHESE BLOCKS WERE BUILT BEFORE BUT FAILED VERIFICATION. Fix exactly these problems:\n- ${problems.join("\n- ")}\n\nCURRENT JSON OF THESE BLOCKS:\n${JSON.stringify(current, null, 2)}\n`;
+    const raw = await generateJson(batchPrompt(description, spec, d, set, apiConfigs, extra), { temperature: 0.1 });
+    return repair(raw, { partial: true });
+  }));
+
+  return ensureSingleStart(mergeDefs(def, parts, affected)) as GeneratedDefinition;
 }
 
 // Targeted fix: send the current JSON back with an exact list of problems
@@ -514,6 +674,7 @@ export async function planOnly(
   if (diagram && !diagram.shapes.length && !description.trim()) {
     throw new Error("DIAGRAM_UNREADABLE");
   }
+  assertDiagramSize(diagram);
   const plan = await planJourney(description, diagram, edit, apiConfigs);
   return {
     plan: plan.map((s, i) => ({
@@ -537,6 +698,7 @@ export async function generateJourney(
   apiConfigs?: any[]
 ): Promise<GenerateResult> {
   const diagram = edit ? null : loadDiagram(drawioXml);
+  assertDiagramSize(diagram);
   const useDiagram = !!diagram && diagram.shapes.length > 0;
   const warnings: string[] = useDiagram ? [...diagram!.warnings] : [];
 
@@ -605,7 +767,6 @@ async function generateFromDiagram(
   warnings: string[]
 ): Promise<GenerateResult> {
   const spec = specFromPlan(plan, d, KNOWN_TYPES);
-  const specCtx = { spec, d };
   console.log(`[drawio] spec: ${spec.nodes.length} blocks, ${spec.edges.length} connections, ${spec.skipped.length} skipped`);
 
   let current = await verify(await buildFromSpec(description, spec, d, apiConfigs), spec, d);
@@ -617,7 +778,7 @@ async function generateFromDiagram(
     const problems = repairableProblems(current.items);
     console.log(`[drawio] repair ${attempts}/${MAX_REPAIRS}: ${problems.length} failed check(s)`);
     try {
-      const candidate = await verify(await fixDefinition(current.def, problems, specCtx, apiConfigs), spec, d);
+      const candidate = await verify(await fixBlocks(current.def, current.items, spec, d, description, apiConfigs), spec, d);
       // Only keep a repair that strictly reduces failures (never regress).
       if (failedCount(candidate.items) < failedCount(current.items)) {
         current = candidate;

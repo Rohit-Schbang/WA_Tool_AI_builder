@@ -774,20 +774,23 @@ export function drawioIdsFor(n: NodeSpec, d: ParsedDiagram): string[] {
   return n.shapeIds.map((id) => byId.get(id) ?? id);
 }
 
-export function describeSpec(spec: FlowSpec, d: ParsedDiagram): string {
+// `only` limits the description to one batch of blocks (and the connections
+// leaving them) when a large flow is built in parts.
+export function describeSpec(spec: FlowSpec, d: ParsedDiagram, only?: Set<string>): string {
   const label = (id: string) => d.shapes.find((s) => s.id === id)?.label ?? id;
-  const nodes = spec.nodes.map((n) => {
+  const inScope = (id: string) => !only || only.has(id);
+  const nodes = spec.nodes.filter((n) => inScope(n.id)).map((n) => {
     const covers = n.shapeIds.length ? ` | from diagram: ${n.shapeIds.map((id) => `"${label(id)}"`).join(", ")}` : "";
     const text = n.text ? ` | text (${n.textSource ?? "written"}): ${JSON.stringify(n.text)}` : "";
     const v = n.variable ? ` | variable: ${n.variable}` : "";
     const val = n.validationType ? ` | validation: ${n.validationType}` : "";
     return `- id "${n.id}" | ${n.nodeType} | "${n.title}"${covers}${text}${v}${val}${n.detail ? ` | ${n.detail}` : ""}`;
   });
-  const normal = spec.edges.filter((e) => e.kind !== "fallback");
-  const fb = spec.edges.filter((e) => e.kind === "fallback");
+  const normal = spec.edges.filter((e) => e.kind !== "fallback" && inScope(e.source));
+  const fb = spec.edges.filter((e) => e.kind === "fallback" && inScope(e.source));
   const edges = normal.map((e) => `- ${e.source} -> ${e.target}${e.label ? `  (label "${e.label}")` : ""}`);
   const fbs = fb.map((e) => `- ${e.source}: no reply for ${e.minutes} min -> ${e.target}`);
-  return `BLOCKS TO CREATE (exactly these ids and node types, ${spec.nodes.length}):\n${nodes.join("\n")}\n\nCONNECTIONS TO CREATE (exactly these, ${normal.length}):\n${edges.join("\n") || "- none"}\n${fbs.length ? `\nNO-REPLY EVENTS (handled automatically — do NOT create edges for these):\n${fbs.join("\n")}\n` : ""}`;
+  return `BLOCKS TO CREATE (exactly these ids and node types, ${nodes.length}):\n${nodes.join("\n")}\n\nCONNECTIONS TO CREATE (exactly these, ${normal.length}):\n${edges.join("\n") || "- none"}\n${fbs.length ? `\nNO-REPLY EVENTS (handled automatically — do NOT create edges for these):\n${fbs.join("\n")}\n` : ""}`;
 }
 
 export const BUILD_RULES = `
