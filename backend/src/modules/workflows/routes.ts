@@ -202,7 +202,14 @@ const generateSchema = z.object({
     detail: z.string().optional(),
     sourceId: z.string().optional(),           // node id this stage becomes
     sourceIds: z.array(z.string()).optional(), // diagram shapes it represents
-  })).optional(),
+    text: z.string().max(4096).optional(),
+    textSource: z.enum(["verbatim", "written"]).optional(),
+    variable: z.string().max(80).optional(),
+    validationType: z.string().max(30).optional(),
+    expectedType: z.string().max(30).optional(),
+    confidence: z.string().max(20).optional(),
+    ambiguity: z.string().max(500).optional(),
+  })).max(500).optional(),
   // EDIT mode: when both are present, the journey is REGENERATED from the
   // existing flow + this instruction (create-new-from-original, not a patch).
   editInstruction: z.string().max(4000).optional(),
@@ -286,13 +293,19 @@ workflowsRouter.post("/generate", async (req: Request, res: Response) => {
     const definition = result.definition ? ensureSingleStart(result.definition as any) : null;
     logActivity(req, "workflow.ai_generate", {
       chatbotId,
-      details: { mode: isEdit ? "edit" : "create", nodes: definition?.nodes.length ?? 0, usedDrawio: !!drawioXml },
+      details: {
+        mode: isEdit ? "edit" : "create",
+        nodes: definition?.nodes.length ?? 0,
+        usedDrawio: !!drawioXml,
+        ...(result.report ? { fidelity: result.report.status, failedChecks: result.report.items.filter((i) => i.status === "failed").length } : {}),
+      },
     });
     return res.json({
       ok: result.ok,
       definition,
       plan: result.plan ?? [],
       warnings: [...(result.errors ?? []), ...(result.warnings ?? [])],
+      report: result.report ?? null,
     });
   } catch (err: any) {
     console.error("Journey generation error:", err?.message ?? err);

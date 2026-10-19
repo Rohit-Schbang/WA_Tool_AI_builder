@@ -8,11 +8,22 @@ import {
   BUILD_RULES,
   specFromPlan,
   describeSpec,
-  specCoverage,
   layoutFromSpec,
   type ParsedDiagram,
   type FlowSpec,
 } from "./drawio.js";
+import { z } from "zod";
+import { KNOWN_TYPES } from "./capabilities.js";
+import {
+  enforceSpec,
+  checkFidelity,
+  simulateBranches,
+  buildReport,
+  repairableProblems,
+  failedCount,
+  type FidelityReport,
+  type CheckItem,
+} from "./fidelity.js";
 
 // AI Journey Generator — turns a natural-language description and/or a draw.io
 // diagram into a workflow definition (nodes + edges + variables) that the
@@ -55,6 +66,9 @@ Available node types and their config fields (use ONLY these):
     Do NOT include url/method/headers/body — the method, URL and body come from the chosen config/endpoint.
     Use an apiConfig NAME from the "Available API configs" list below; if none exist or none fit, leave apiConfig "" (the user picks one later).
     Has TWO outgoing edges: sourceHandle "true" (2xx success) and sourceHandle "else" (failure).
+- VALIDATE: check a value and branch. config: { mode: "regex"|"expression", value?: string (regex mode: the value to test, e.g. "{{email}}"),
+    pattern?: string (regex mode, e.g. "^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$"), expression?: string (JS using vars.x, expression mode) }
+    Has TWO outgoing edges: sourceHandle "true" (valid) and sourceHandle "else" (invalid).
 - WAIT: pause. config: { seconds: number }
 
 Reference variables inside any text/url/body with double braces, e.g. {{name}}.
@@ -100,10 +114,7 @@ function apiConfigsBlock(apiConfigs?: any[]): string {
   return `\nAvailable API configs (use ONLY these names for API_REQUEST nodes):\n${lines.join("\n")}\n`;
 }
 
-const KNOWN_TYPES = new Set([
-  "START", "SEND_MESSAGE", "ASK_INPUT", "BUTTONS", "LIST", "CONDITION", "AI_RESPONSE",
-  "SET_VARIABLE", "VALIDATE", "TRANSFORM", "API_REQUEST", "WAIT",
-]);
+
 
 // Repair the raw model output into a canvas-ready definition: unique ids,
 // known node types, seq numbers, positions, well-formed edges, exactly one START.
@@ -174,6 +185,13 @@ export interface PlanStage {
   detail: string;       // what it does + how it branches
   sourceId?: string;    // node id this stage becomes (diagram mode)
   sourceIds?: string[]; // diagram shapes this stage represents (diagram mode)
+  text?: string;        // exact user-facing text (diagram mode)
+  textSource?: "verbatim" | "written";
+  variable?: string;
+  validationType?: string;
+  expectedType?: string;
+  confidence?: string;
+  ambiguity?: string;
 }
 
 export interface DiagramSummary {
@@ -189,6 +207,36 @@ export interface GenerateResult {
   plan?: PlanStage[];
   errors?: string[];
   warnings?: string[];
+  report?: FidelityReport;   // diagram mode: source-to-output verification
+}
+
+// Structured-output schema for the AI's plan (diagram mode). Invalid stages
+// are dropped rather than trusted; specFromPlan then re-adds anything missing.
+const PlanStageSchema = z.object({
+  title: z.string().max(200).optional(),
+  nodeType: z.string().max(40),
+  sourceIds: z.array(z.string().max(200)).max(200).optional(),
+  sourceId: z.string().max(200).optional(),
+  detail: z.string().max(2000).optional(),
+  text: z.string().max(4096).optional(),
+  textSource: z.string().max(20).optional(),
+  variable: z.string().max(80).optional(),
+  validationType: z.string().max(30).optional(),
+  expectedType: z.string().max(30).optional(),
+  confidence: z.string().max(20).optional(),
+  ambiguity: z.string().max(500).optional(),
+}).passthrough();
+
+function sanitizePlan(raw: any): PlanStage[] {
+  const list: any[] = Array.isArray(raw?.plan) ? raw.plan : [];
+  return list.flatMap((s, i) => {
+    const r = PlanStageSchema.safeParse(s);
+    if (!r.success) {
+      console.warn(`[drawio] dropped invalid plan stage #${i + 1}:`, r.error.issues[0]?.message);
+      return [];
+    }
+    return [{ ...r.data, step: i + 1, title: r.data.title ?? "", detail: r.data.detail ?? "" } as PlanStage];
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -281,14 +329,18 @@ Produce the plan as ordered stages following the flow. Each stage has:
 - "sourceIds": the ids of ALL diagram shapes this stage represents (a block may absorb
   the user-action / system-event shapes around it)
 - "detail": what the block does / says / asks and how it branches; for SKIP, why.
+- "text", "textSource", "variable", "validationType", "expectedType" (see TEXT FIDELITY)
+- "confidence" and, when not high, "ambiguity"
 Exactly ONE stage has nodeType "START". Every shape id (except END shapes) must appear
 in exactly one stage's sourceIds.
 
-Return STRICT JSON: { "plan": [ { "title": string, "nodeType": string, "sourceIds": string[], "detail": string } ] }
+Return STRICT JSON: { "plan": [ { "title": string, "nodeType": string, "sourceIds": string[], "detail": string,
+  "text"?: string, "textSource"?: "verbatim"|"written", "variable"?: string, "validationType"?: string,
+  "expectedType"?: string, "confidence": "high"|"medium"|"low", "ambiguity"?: string } ] }
 ${description ? `\nExtra context from the user (wording, intent):\n"""\n${description}\n"""\n` : ""}`;
 
   const raw = await generateJson(p, { temperature: 0.2 });
-  const plan: PlanStage[] = Array.isArray(raw?.plan) ? raw.plan : [];
+  const plan = sanitizePlan(raw);
 
   // Normalise against the diagram: guarantees one START, every shape accounted
   // for (missing ones classified by the parser's hints), and stable node ids.
@@ -305,13 +357,22 @@ function specToPlan(spec: FlowSpec, d: ParsedDiagram): PlanStage[] {
     const branches = out.length > 1 ? ` Branches: ${out.map((e) => `${e.label || label(e.target)} → ${e.target}`).join(", ")}.` : "";
     const absorbed = n.shapeIds.filter((id) => id !== n.id).map((id) => `“${label(id)}”`);
     const covers = absorbed.length ? ` Includes: ${absorbed.join(", ")}.` : "";
+    const fallback = spec.edges.find((e) => e.source === n.id && e.kind === "fallback");
+    const event = fallback ? ` If no reply in ${fallback.minutes} min → ${fallback.target}.` : "";
     return {
       step: i + 1,
       title: n.title,
       nodeType: n.nodeType,
-      detail: `${n.detail}${branches}${covers}`.trim(),
+      detail: `${n.detail}${branches}${event}${covers}`.trim(),
       sourceId: n.id,
       sourceIds: n.shapeIds,
+      ...(n.text ? { text: n.text } : {}),
+      ...(n.textSource ? { textSource: n.textSource } : {}),
+      ...(n.variable ? { variable: n.variable } : {}),
+      ...(n.validationType ? { validationType: n.validationType } : {}),
+      ...(n.expectedType ? { expectedType: n.expectedType } : {}),
+      ...(n.confidence ? { confidence: n.confidence } : {}),
+      ...(n.ambiguity ? { ambiguity: n.ambiguity } : {}),
     };
   });
   for (const s of spec.skipped) {
@@ -383,22 +444,6 @@ ${JSON.stringify({ variables: def.variables, nodes: def.nodes.map((n) => ({ id: 
   return repair(await generateJson(p, { temperature: 0.1 }));
 }
 
-type SpecCoverage = ReturnType<typeof specCoverage>;
-const coverageCount = (c: SpecCoverage) => c.missingNodes.length + c.missingEdges.length;
-
-function coverageProblems(c: SpecCoverage): string[] {
-  return [
-    ...c.missingNodes.map((n) => `Missing block id "${n.id}" (${n.nodeType}, "${n.title}"). Create it with exactly this id and type.`),
-    ...c.missingEdges.map((e) => `Missing connection ${e.source} -> ${e.target}${e.label ? ` (label "${e.label}")` : ""}. Add the edge (with the correct sourceHandle if the source branches).`),
-  ];
-}
-
-function coverageWarnings(c: SpecCoverage): string[] {
-  return [
-    ...c.missingNodes.map((n) => `Diagram step “${n.title}” wasn't created — add it manually.`),
-    ...c.missingEdges.map((e) => `Connection ${e.source} → ${e.target}${e.label ? ` (“${e.label}”)` : ""} is missing.`),
-  ];
-}
 
 // QC (description mode only): a model self-review against the plan.
 async function qcReview(plan: PlanStage[], def: GeneratedDefinition): Promise<GeneratedDefinition> {
@@ -472,6 +517,7 @@ export async function planOnly(
   const plan = await planJourney(description, diagram, edit, apiConfigs);
   return {
     plan: plan.map((s, i) => ({
+      ...s,
       step: i + 1,
       title: String(s.title ?? `Stage ${i + 1}`),
       nodeType: String(s.nodeType ?? "SEND_MESSAGE"),
@@ -504,27 +550,12 @@ export async function generateJourney(
     }
   }
 
-  // In diagram mode the (approved) plan says which shapes are real blocks and
-  // which were merged/skipped; turn it into the exact block + connection list.
-  const spec = useDiagram ? specFromPlan(plan, diagram!, KNOWN_TYPES) : null;
-  const specCtx = spec ? { spec, d: diagram! } : null;
+  if (useDiagram) return generateFromDiagram(description, plan, diagram!, apiConfigs, warnings);
 
-  // 2) BUILD
+  // 2) BUILD (description / edit modes)
   let def: GeneratedDefinition;
   if (edit) {
     def = await patchBuild(edit, plan, undefined, apiConfigs);
-  } else if (spec) {
-    def = await buildFromSpec(description, spec, diagram!, apiConfigs);
-    // Coverage check against the block list — up to two targeted fixes.
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const cov = specCoverage(def, spec);
-      if (!coverageCount(cov)) break;
-      try {
-        const fixed = await fixDefinition(def, coverageProblems(cov), specCtx, apiConfigs);
-        if (coverageCount(specCoverage(fixed, spec)) < coverageCount(cov)) def = fixed;
-        else break;
-      } catch { break; }
-    }
   } else {
     def = await buildFromPlan(description, plan, undefined, apiConfigs);
     try {
@@ -540,22 +571,76 @@ export async function generateJourney(
     try {
       const def2 = edit
         ? await patchBuild(edit, plan, errors, apiConfigs)
-        : await fixDefinition(def, errors, specCtx, apiConfigs);
+        : await fixDefinition(def, errors, null, apiConfigs);
       const errors2 = relevantErrors(def2);
-      // In diagram mode, don't trade structural fidelity for validity.
-      const keepsCoverage = !spec || coverageCount(specCoverage(def2, spec)) <= coverageCount(specCoverage(def, spec));
-      if (errors2.length < errors.length && keepsCoverage) { def = def2; errors = errors2; }
+      if (errors2.length < errors.length) { def = def2; errors = errors2; }
     } catch { /* keep def */ }
-  }
-
-  if (spec) {
-    warnings.push(...coverageWarnings(specCoverage(def, spec)));
-    def = { ...layoutFromSpec(def, spec, diagram!), meta: { layout: "drawio" } };
   }
 
   return errors.length
     ? { ok: false, definition: def, plan, errors, warnings }
     : { ok: true, definition: def, plan, warnings };
+}
+
+// Max targeted AI repairs after fidelity validation (bounded correction loop).
+const MAX_REPAIRS = 3;
+
+async function verify(def: GeneratedDefinition, spec: FlowSpec, d: ParsedDiagram) {
+  const enforced = enforceSpec(def, spec, d);
+  const items: CheckItem[] = [
+    ...checkFidelity(enforced.def, spec, d),
+    ...(await simulateBranches(enforced.def, spec, d)),
+  ];
+  return { def: enforced.def, items, corrections: enforced.corrections };
+}
+
+// Diagram mode: build from the analysed spec, verify against the source
+// independently (static checks + simulated execution), repair only what failed,
+// re-verify, and report exactly what was and wasn't confirmed.
+async function generateFromDiagram(
+  description: string,
+  plan: PlanStage[],
+  d: ParsedDiagram,
+  apiConfigs: any[] | undefined,
+  warnings: string[]
+): Promise<GenerateResult> {
+  const spec = specFromPlan(plan, d, KNOWN_TYPES);
+  const specCtx = { spec, d };
+  console.log(`[drawio] spec: ${spec.nodes.length} blocks, ${spec.edges.length} connections, ${spec.skipped.length} skipped`);
+
+  let current = await verify(await buildFromSpec(description, spec, d, apiConfigs), spec, d);
+  const corrections = [...current.corrections];
+  let attempts = 0;
+
+  while (failedCount(current.items) > 0 && attempts < MAX_REPAIRS) {
+    attempts++;
+    const problems = repairableProblems(current.items);
+    console.log(`[drawio] repair ${attempts}/${MAX_REPAIRS}: ${problems.length} failed check(s)`);
+    try {
+      const candidate = await verify(await fixDefinition(current.def, problems, specCtx, apiConfigs), spec, d);
+      // Only keep a repair that strictly reduces failures (never regress).
+      if (failedCount(candidate.items) < failedCount(current.items)) {
+        current = candidate;
+        corrections.push(...candidate.corrections);
+      } else {
+        console.log(`[drawio] repair ${attempts} didn't improve (${failedCount(candidate.items)} vs ${failedCount(current.items)} failed); stopping`);
+        break;
+      }
+    } catch (err: any) {
+      console.warn(`[drawio] repair ${attempts} failed:`, err?.message ?? err);
+      break;
+    }
+  }
+
+  const def: GeneratedDefinition = { ...layoutFromSpec(current.def, spec, d), meta: { layout: "drawio" } };
+  const report = buildReport(def, spec, d, current.items, corrections, attempts);
+  const failures = current.items.filter((i) => i.status === "failed").map((i) => i.message);
+  warnings.push(...spec.notes);
+
+  console.log(`[drawio] done: status=${report.status} failed=${failures.length} repairs=${attempts}`);
+  return failures.length
+    ? { ok: false, definition: def, plan, errors: failures, warnings, report }
+    : { ok: true, definition: def, plan, warnings, report };
 }
 
 // Build an EditContext from a current definition + instruction.

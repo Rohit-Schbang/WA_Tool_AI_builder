@@ -40,6 +40,26 @@ export interface DiagramEdge {
   source: string;      // node ids (mapped)
   target: string;
   label: string;
+  // "fallback" = a no-reply / timeout transition. Mapped to the app's native
+  // no-reply fallback (config.fallback on the waiting node), not a normal edge.
+  kind?: "fallback";
+  minutes?: number;
+}
+
+// Connector labels that describe a timeout / no-reply event.
+export const TIMEOUT_RE =
+  /\b(no\s+(reply|response|answer|input)|not\s+(reply|respond|answer)(ed|ing)?|time\s*-?\s*out|timed\s*out|inactiv\w*|idle|silen(t|ce)|didn'?t\s+(reply|respond))\b/i;
+
+export function timeoutMinutes(label: string): { minutes: number; clamped: boolean } {
+  const m = label.match(/(\d+(?:\.\d+)?)\s*(s|sec|secs|seconds?|m|min|mins|minutes?|h|hr|hrs|hours?|d|days?)\b/i);
+  let minutes = 5;
+  if (m) {
+    const n = Number(m[1]);
+    const u = m[2].toLowerCase();
+    minutes = u.startsWith("s") ? n / 60 : u.startsWith("h") ? n * 60 : u.startsWith("d") ? n * 1440 : n;
+  }
+  const clampedValue = Math.max(1, Math.min(10, Math.round(minutes)));
+  return { minutes: clampedValue, clamped: clampedValue !== Math.round(minutes) };
 }
 
 export interface ParsedDiagram {
@@ -226,6 +246,7 @@ function suggestType(shape: { label: string; kind: ShapeKind; isStart: boolean }
 
   if (shape.kind === "decision" || branching) {
     const yesNo = out.length === 2 && out.every((e) => !e.label || YES_NO_RE.test(e.label.trim()));
+    if (yesNo && /\b(valid|validity|invalid|format|correct|well-?formed)\b/.test(l)) return "VALIDATE";
     if (yesNo) return "CONDITION";
     if (branching) return out.length <= 3 ? "SEND_MESSAGE with buttons" : "LIST";
     return "CONDITION";
@@ -267,7 +288,10 @@ export function parseDrawio(xml: string): ParsedDiagram {
     }
   });
 
-  const byId = new Map(all.map((c) => [c.id, c]));
+  // First cell wins on duplicate ids (malformed files), so a later edge can't
+  // shadow a layer/parent cell with the same id.
+  const byId = new Map<string, RawCell>();
+  for (const c of all) if (!byId.has(c.id)) byId.set(c.id, c);
   const isEdgeId = (id?: string) => !!id && !!byId.get(id)?.edge;
 
   // Absolute position: geometry is relative to a vertex parent (containers).
@@ -461,9 +485,13 @@ where the BOT does something become workflow blocks.
    location, audio).
 6. MENU / OPTIONS (choose one of several branches): SEND_MESSAGE with cta buttons (≤3)
    or LIST (4+). Each branch becomes a button/row.
-7. DECISION / CHECK (diamonds, "Is …?", "Valid?", "Registered?", "If …"): CONDITION on
-   the relevant variable. If the diamond is really the user's choice between buttons,
-   merge it into the buttons stage instead.
+7. DECISION / CHECK (diamonds, "Is …?", "Registered?", "If …"): CONDITION on the relevant
+   variable — say in the detail WHICH variable and WHAT value means "yes" (e.g. "status
+   equals registered"). If the diamond is really the user's choice between buttons, merge
+   it into the buttons stage instead.
+7b. VALIDITY CHECK of an answer just collected ("Is email valid?", "Valid phone?",
+   "Correct format?"): VALIDATE (mode "regex" on that answer's variable, with a suitable
+   pattern) — not CONDITION. Also set the question's validationType.
 8. BACKEND PROCESS ("Save details", "Store in DB / sheet", "Create lead in CRM",
    "Fetch slots", "Call API", "Send to server", "Update record"): API_REQUEST.
 9. VALUE PROCESSING ("Set status = new", "Store name in variable", "Calculate total",
@@ -474,7 +502,27 @@ where the BOT does something become workflow blocks.
 13. END shapes: leave them out (the branch just ends).
 
 NEVER turn a user action, a system event or a process description into SEND_MESSAGE.
+
+TEXT FIDELITY — for every message / question / menu stage also return:
+- "text": the exact words the user will read.
+- "textSource": "verbatim" when the diagram shape already contains the actual words
+  (quoted text, a full sentence addressed to the user, e.g. "Welcome to Garage Care! How
+  can we help?") — copy it EXACTLY, including punctuation, emojis and {{variables}}.
+  "written" only when the shape merely DESCRIBES the step (e.g. "Greet user and introduce
+  the brand") — then write natural WhatsApp copy that does exactly what it describes.
+- For questions: "variable" (snake_case name to store the answer) and, when obvious,
+  "validationType" (email/phone/number/url/none) and "expectedType" (text/image/…).
+
+EVENTS — a connector labelled like "no reply", "timeout", "no response in 5 min",
+"user inactive" leaving a question/menu is a NO-REPLY event, not a normal step. Keep it
+in the plan detail ("if no reply in N min → …"); it becomes that block's no-reply fallback.
+
+UNCERTAINTY — add "confidence": "high" | "medium" | "low" and, when not high,
+"ambiguity": a one-line explanation of what is unclear. Never invent behaviour that the
+diagram doesn't show; flag it instead.
 `;
+
+export type Confidence = "high" | "medium" | "low";
 
 export interface NodeSpec {
   id: string;
@@ -482,12 +530,20 @@ export interface NodeSpec {
   title: string;
   detail: string;
   shapeIds: string[];
+  text?: string;
+  textSource?: "verbatim" | "written";
+  variable?: string;
+  validationType?: string;
+  expectedType?: string;
+  confidence?: Confidence;
+  ambiguity?: string;
 }
 
 export interface FlowSpec {
   nodes: NodeSpec[];
   edges: DiagramEdge[];                                   // between NODE ids (after merges)
   skipped: { id: string; label: string; reason: string }[];
+  notes: string[];                                        // mapping-level warnings
 }
 
 interface PlanLike {
@@ -496,6 +552,28 @@ interface PlanLike {
   detail?: string;
   sourceId?: string;
   sourceIds?: string[];
+  text?: string;
+  textSource?: string;
+  variable?: string;
+  validationType?: string;
+  expectedType?: string;
+  confidence?: string;
+  ambiguity?: string;
+}
+
+// Fields of a plan stage that carry over to its block.
+function stageExtras(stage: PlanLike): Partial<NodeSpec> {
+  const conf = String(stage.confidence ?? "").toLowerCase();
+  const src = String(stage.textSource ?? "").toLowerCase();
+  const out: Partial<NodeSpec> = {};
+  if (typeof stage.text === "string" && stage.text.trim()) out.text = stage.text;
+  if (src === "verbatim" || src === "written") out.textSource = src;
+  if (typeof stage.variable === "string" && stage.variable.trim()) out.variable = stage.variable.replace(/[{}\s]/g, "");
+  if (typeof stage.validationType === "string" && stage.validationType.trim()) out.validationType = stage.validationType.toLowerCase();
+  if (typeof stage.expectedType === "string" && stage.expectedType.trim()) out.expectedType = stage.expectedType.toLowerCase();
+  if (conf === "high" || conf === "medium" || conf === "low") out.confidence = conf;
+  if (typeof stage.ambiguity === "string" && stage.ambiguity.trim()) out.ambiguity = stage.ambiguity.trim();
+  return out;
 }
 
 // Turn the approved plan (each stage lists the diagram shapes it represents)
@@ -534,18 +612,54 @@ export function specFromPlan(plan: PlanLike[], d: ParsedDiagram, knownTypes: Set
     if (type === "START") {
       let start = nodes.find((n) => n.nodeType === "START");
       if (!start) {
-        start = { id: uniq("start"), nodeType: "START", title: stage.title || "Start", detail: stage.detail || "", shapeIds: [] };
+        start = { id: uniq("start"), nodeType: "START", title: stage.title || "Start", detail: stage.detail || "", shapeIds: [], ...stageExtras(stage) };
         nodes.unshift(start);
       }
       for (const id of ids) { assign.set(id, start.id); start.shapeIds.push(id); }
       continue;
     }
 
-    const nodeType = knownTypes.has(type) ? type : "SEND_MESSAGE";
+    let nodeType = knownTypes.has(type) ? type : "SEND_MESSAGE";
+    const extras = stageExtras(stage);
+    if (!knownTypes.has(type)) {
+      extras.confidence = "low";
+      extras.ambiguity = `Unsupported block type "${stage.nodeType}" — mapped to SEND_MESSAGE; review.`;
+    }
     const primary = ids.find((id) => id !== "start") ?? ids[0];
     const id = uniq(primary && primary !== "start" ? primary : `n_${nodes.length + 1}`);
-    nodes.push({ id, nodeType, title: stage.title || shapeById.get(primary ?? "")?.label || nodeType, detail: stage.detail || "", shapeIds: ids });
+    nodes.push({ id, nodeType, title: stage.title || shapeById.get(primary ?? "")?.label || nodeType, detail: stage.detail || "", shapeIds: ids, ...extras });
     for (const sid of ids) assign.set(sid, id);
+  }
+
+  // Guard against over-merging: a shape folded into another block must not be
+  // its own bot step. Split it back out when it is
+  //  (a) the destination of a no-reply / timeout event, or
+  //  (b) a bot-type step (message, question, API…) entered from OUTSIDE the
+  //      block — i.e. a separate step the flow reaches on its own.
+  const BOT_HINT = /^(SEND_MESSAGE|ASK_INPUT|API_REQUEST|AI_RESPONSE|WAIT|LIST|SET_VARIABLE|TRANSFORM)/;
+  const timeoutTargets = new Set(d.edges.filter((e) => e.label && TIMEOUT_RE.test(e.label)).map((e) => e.target));
+  for (const n of [...nodes]) {
+    for (const sid of [...n.shapeIds]) {
+      if (sid === n.id || n.nodeType === "START") continue;
+      const s = shapeById.get(sid);
+      if (!s) continue;
+      const fromOutside = d.edges.some((e) => e.target === sid && !n.shapeIds.includes(e.source));
+      const isTimeoutTarget = timeoutTargets.has(sid);
+      if (!(isTimeoutTarget || (BOT_HINT.test(s.suggested) && fromOutside))) continue;
+      n.shapeIds = n.shapeIds.filter((x) => x !== sid);
+      const t = s.suggested.split(" ")[0];
+      const id = uniq(sid);
+      nodes.push({
+        id,
+        nodeType: knownTypes.has(t) ? t : "SEND_MESSAGE",
+        title: s.label.slice(0, 60),
+        detail: `Separate step in the diagram (was merged into “${n.title}”).`,
+        shapeIds: [sid],
+        confidence: "medium",
+        ambiguity: `“${s.label}” was split out of “${n.title}” because ${isTimeoutTarget ? "a no-reply event leads to it" : "the flow reaches it on its own"}; check its wording.`,
+      });
+      assign.set(sid, id);
+    }
   }
 
   // Shapes the plan didn't mention: user actions/system events/notes are
@@ -574,7 +688,15 @@ export function specFromPlan(plan: PlanLike[], d: ParsedDiagram, knownTypes: Set
     }
     const t = s.suggested.split(" ")[0];
     const id = uniq(s.id);
-    nodes.push({ id, nodeType: knownTypes.has(t) ? t : "SEND_MESSAGE", title: s.label.slice(0, 60), detail: "Added from diagram (not in the plan)", shapeIds: [s.id] });
+    nodes.push({
+      id,
+      nodeType: knownTypes.has(t) ? t : "SEND_MESSAGE",
+      title: s.label.slice(0, 60),
+      detail: "Added from diagram (not in the plan)",
+      shapeIds: [s.id],
+      confidence: "low",
+      ambiguity: `The plan didn't map “${s.label}”; added as ${knownTypes.has(t) ? t : "SEND_MESSAGE"} from its shape — review.`,
+    });
     assign.set(s.id, id);
   }
 
@@ -600,17 +722,36 @@ export function specFromPlan(plan: PlanLike[], d: ParsedDiagram, knownTypes: Set
     return (out.get(shapeId) ?? []).flatMap((e) => resolve(e.target, carry || e.label, new Set(seen)));
   };
 
+  const notes: string[] = [];
   const edges: DiagramEdge[] = [];
   const pairs = new Set<string>();
+  const nodeById = new Map(nodes.map((n) => [n.id, n]));
+  const WAITING = new Set(["ASK_INPUT", "BUTTONS", "LIST", "SEND_MESSAGE", "WAIT"]);
   for (const e of d.edges) {
     const from = assign.get(e.source);
     if (!from) continue; // handled when its predecessors resolve through it
-    for (const t of resolve(e.target, e.label, new Set([e.source]))) {
+    // A user-action shape merged INTO this block ("User selects Oil Change"
+    // absorbed by the menu) names the branch that leaves it.
+    const src = shapeById.get(e.source);
+    const carried = e.label || (src && src.id !== from && /^USER ACTION/.test(src.suggested) ? src.label : "");
+    for (const t of resolve(e.target, carried, new Set([e.source]))) {
       if (t.id === from) continue;            // internal to a merged block
       const key = `${from}|${t.id}`;
       if (pairs.has(key)) continue;
       pairs.add(key);
-      edges.push({ source: from, target: t.id, label: t.label });
+      const edge: DiagramEdge = { source: from, target: t.id, label: t.label };
+      // Timeout / no-reply connector -> native no-reply fallback.
+      if (e.label && TIMEOUT_RE.test(e.label)) {
+        if (WAITING.has(nodeById.get(from)?.nodeType ?? "")) {
+          const { minutes, clamped } = timeoutMinutes(e.label);
+          edge.kind = "fallback";
+          edge.minutes = minutes;
+          if (clamped) notes.push(`“${e.label}”: the app's no-reply timer allows 1–10 minutes, so it was set to ${minutes} min.`);
+        } else {
+          notes.push(`“${e.label}” looks like a timeout, but it leaves a block that doesn't wait for a reply; kept as a normal connection.`);
+        }
+      }
+      edges.push(edge);
     }
   }
 
@@ -622,17 +763,31 @@ export function specFromPlan(plan: PlanLike[], d: ParsedDiagram, knownTypes: Set
     if (entry) edges.unshift({ source: startNode.id, target: entry.id, label: "" });
   }
   // No edge may point into START.
-  return { nodes, edges: edges.filter((e) => e.target !== startNode.id), skipped };
+  const intoStart = edges.filter((e) => e.target === startNode.id);
+  if (intoStart.length) notes.push(`${intoStart.length} connection(s) loop back to the start; the app doesn't allow that, so they were removed.`);
+  return { nodes, edges: edges.filter((e) => e.target !== startNode.id), skipped, notes };
+}
+
+// draw.io ids behind a spec block (for traceability in node config + reports).
+export function drawioIdsFor(n: NodeSpec, d: ParsedDiagram): string[] {
+  const byId = new Map(d.shapes.map((s) => [s.id, s.drawioId]));
+  return n.shapeIds.map((id) => byId.get(id) ?? id);
 }
 
 export function describeSpec(spec: FlowSpec, d: ParsedDiagram): string {
   const label = (id: string) => d.shapes.find((s) => s.id === id)?.label ?? id;
   const nodes = spec.nodes.map((n) => {
     const covers = n.shapeIds.length ? ` | from diagram: ${n.shapeIds.map((id) => `"${label(id)}"`).join(", ")}` : "";
-    return `- id "${n.id}" | ${n.nodeType} | "${n.title}"${covers}${n.detail ? ` | ${n.detail}` : ""}`;
+    const text = n.text ? ` | text (${n.textSource ?? "written"}): ${JSON.stringify(n.text)}` : "";
+    const v = n.variable ? ` | variable: ${n.variable}` : "";
+    const val = n.validationType ? ` | validation: ${n.validationType}` : "";
+    return `- id "${n.id}" | ${n.nodeType} | "${n.title}"${covers}${text}${v}${val}${n.detail ? ` | ${n.detail}` : ""}`;
   });
-  const edges = spec.edges.map((e) => `- ${e.source} -> ${e.target}${e.label ? `  (label "${e.label}")` : ""}`);
-  return `BLOCKS TO CREATE (exactly these ids and node types, ${spec.nodes.length}):\n${nodes.join("\n")}\n\nCONNECTIONS TO CREATE (exactly these, ${spec.edges.length}):\n${edges.join("\n") || "- none"}\n`;
+  const normal = spec.edges.filter((e) => e.kind !== "fallback");
+  const fb = spec.edges.filter((e) => e.kind === "fallback");
+  const edges = normal.map((e) => `- ${e.source} -> ${e.target}${e.label ? `  (label "${e.label}")` : ""}`);
+  const fbs = fb.map((e) => `- ${e.source}: no reply for ${e.minutes} min -> ${e.target}`);
+  return `BLOCKS TO CREATE (exactly these ids and node types, ${spec.nodes.length}):\n${nodes.join("\n")}\n\nCONNECTIONS TO CREATE (exactly these, ${normal.length}):\n${edges.join("\n") || "- none"}\n${fbs.length ? `\nNO-REPLY EVENTS (handled automatically — do NOT create edges for these):\n${fbs.join("\n")}\n` : ""}`;
 }
 
 export const BUILD_RULES = `
@@ -640,8 +795,9 @@ BUILD RULES (the block list above is authoritative):
 - Create exactly the listed blocks with exactly those ids and node types — no more, no less (this overrides rule 8).
 - Create exactly the listed connections. Do not add others.
 - Write each block's config from its title, its diagram shapes and its detail:
-   • SEND_MESSAGE text = the actual words the bot sends (natural, friendly WhatsApp copy).
-   • ASK_INPUT text = the question to the user; pick a sensible variable name.
+   • When a block lists "text (verbatim)", use that text EXACTLY as config.text — do not reword it.
+   • When it lists "text (written)", use it as config.text (it's already the approved copy).
+   • ASK_INPUT: use the listed variable / validation; otherwise pick a sensible snake_case variable.
    • START: put trigger words quoted in its diagram shapes (e.g. "Hi") into config.keywords.
 - Branching (a block with 2+ connections):
    • CONDITION: the yes/true/valid/success connection uses sourceHandle "true", the other "else".
@@ -655,7 +811,7 @@ export function specCoverage(def: { nodes: any[]; edges: any[] }, spec: FlowSpec
   const pairs = new Set(def.edges.map((e) => `${e.source}|${e.target}`));
   return {
     missingNodes: spec.nodes.filter((n) => !ids.has(n.id)),
-    missingEdges: spec.edges.filter((e) => !pairs.has(`${e.source}|${e.target}`)),
+    missingEdges: spec.edges.filter((e) => e.kind !== "fallback" && !pairs.has(`${e.source}|${e.target}`)),
   };
 }
 
