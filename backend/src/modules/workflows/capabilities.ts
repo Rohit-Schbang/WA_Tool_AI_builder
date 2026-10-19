@@ -36,6 +36,39 @@ export const CAPABILITIES: Record<string, NodeCapability> = {
 
 export const KNOWN_TYPES = new Set(Object.keys(CAPABILITIES));
 
+// Node types the builder palette offers (plus START). The AI generator may
+// only produce these — VALIDATE/BUTTONS still run in the runtime (old flows)
+// but have no block in the builder, so they're mapped to their palette twin.
+export const BUILDER_TYPES = new Set([
+  "START", "SEND_MESSAGE", "ASK_INPUT", "LIST", "CONDITION",
+  "AI_RESPONSE", "SET_VARIABLE", "TRANSFORM", "API_REQUEST", "WAIT",
+]);
+
+const BUILDER_ALIAS: Record<string, string> = { VALIDATE: "CONDITION", BUTTONS: "SEND_MESSAGE" };
+
+export function toBuilderType(t: string): string {
+  const u = String(t ?? "").toUpperCase().trim();
+  return BUILDER_ALIAS[u] ?? u;
+}
+
+// Map a node of a non-palette type onto its palette equivalent (type + config).
+export function toBuilderNode<T extends { nodeType: string; config?: any }>(node: T): T {
+  const from = String(node.nodeType ?? "").toUpperCase().trim();
+  const c = node.config ?? {};
+  if (from === "VALIDATE") {
+    // The validity rule itself belongs on the question (validationType, which
+    // re-asks until valid); the branch becomes a plain If/Else on the answer.
+    const m = String(c.value ?? "").match(/\{\{\s*(\w+)\s*\}\}/);
+    const field = m?.[1] ?? String(c.field ?? "");
+    return { ...node, nodeType: "CONDITION", config: { name: c.name, field, operator: "is_not_empty", value: "" } };
+  }
+  if (from === "BUTTONS") {
+    const buttons = (Array.isArray(c.buttons) ? c.buttons : []).map((b: any) => ({ ...b, kind: "cta" }));
+    return { ...node, nodeType: "SEND_MESSAGE", config: { ...c, buttons } };
+  }
+  return node;
+}
+
 // Options on a node (buttons / list rows). SEND_MESSAGE only branches on
 // "cta" buttons; "url" buttons open a link and don't branch.
 export function branchOptions(node: { nodeType: string; config?: any }): { id: string; label: string }[] {

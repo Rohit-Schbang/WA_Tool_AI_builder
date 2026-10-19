@@ -1,4 +1,5 @@
 import zlib from "zlib";
+import { toBuilderType } from "./capabilities.js";
 
 // ---------------------------------------------------------------------------
 // draw.io parser — turns a .drawio / .xml file into a clean list of shapes and
@@ -246,7 +247,9 @@ function suggestType(shape: { label: string; kind: ShapeKind; isStart: boolean }
 
   if (shape.kind === "decision" || branching) {
     const yesNo = out.length === 2 && out.every((e) => !e.label || YES_NO_RE.test(e.label.trim()));
-    if (yesNo && /\b(valid|validity|invalid|format|correct|well-?formed)\b/.test(l)) return "VALIDATE";
+    // Validity checks use the question's own validation + an If/Else
+    // (there is no separate validation block in the builder).
+    if (yesNo && /\b(valid|validity|invalid|format|correct|well-?formed)\b/.test(l)) return "CONDITION (validity check)";
     if (yesNo) return "CONDITION";
     if (branching) return out.length <= 3 ? "SEND_MESSAGE with buttons" : "LIST";
     return "CONDITION";
@@ -490,8 +493,10 @@ where the BOT does something become workflow blocks.
    equals registered"). If the diamond is really the user's choice between buttons, merge
    it into the buttons stage instead.
 7b. VALIDITY CHECK of an answer just collected ("Is email valid?", "Valid phone?",
-   "Correct format?"): VALIDATE (mode "regex" on that answer's variable, with a suitable
-   pattern) — not CONDITION. Also set the question's validationType.
+   "Correct format?"): set the question's validationType (email/phone/number/url) and a
+   failureMessage — the question re-asks automatically until the answer is valid. If the
+   diagram draws the check as its own diamond, make it a CONDITION on that answer's
+   variable (operator "is_not_empty"). There is NO VALIDATE block — never use it.
 8. BACKEND PROCESS ("Save details", "Store in DB / sheet", "Create lead in CRM",
    "Fetch slots", "Call API", "Send to server", "Update record"): API_REQUEST.
 9. VALUE PROCESSING ("Set status = new", "Store name in variable", "Calculate total",
@@ -596,7 +601,7 @@ export function specFromPlan(plan: PlanLike[], d: ParsedDiagram, knownTypes: Set
   };
 
   for (const stage of plan) {
-    const type = String(stage.nodeType ?? "").toUpperCase().trim();
+    const type = toBuilderType(String(stage.nodeType ?? ""));
     const ids = [...(stage.sourceIds ?? []), ...(stage.sourceId ? [stage.sourceId] : [])]
       .map(String)
       .filter((id, i, a) => shapeById.has(id) && a.indexOf(id) === i && !assign.has(id) && !skippedIds.has(id));

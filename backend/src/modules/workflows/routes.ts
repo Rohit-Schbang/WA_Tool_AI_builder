@@ -21,10 +21,14 @@ import { ConsoleAdapter } from "../messaging/adapters.js";
 import { generateJourney, planOnly, makeEditContext, DIAGRAM_LIMITS } from "./generator.js";
 import { logActivity } from "../activity/service.js";
 import { ensureSingleStart } from "./startNode.js";
+import { reportsRouter, saveReport } from "./reports.js";
 
 export const workflowsRouter = Router({ mergeParams: true });
 
 workflowsRouter.use(requireAuth)          //    Auth Wrapper   -------------------->>>>>> 
+
+// Saved AI build reports: api/chatbots/:chatbotId/workflow/reports
+workflowsRouter.use("/reports", reportsRouter);
 
 // DRAFT Schema ----------------------->>  >>>>
 
@@ -190,6 +194,8 @@ workflowsRouter.post("/ping", async (req: Request, res: Response) => {
 // workflow definition the frontend can drop onto the canvas. Does NOT save it.
 const generateSchema = z.object({
   description: z.string().max(8000).optional().default(""),
+  // Display name of the attached draw.io file (used to title the saved report).
+  sourceName: z.string().max(200).optional(),
   // Uncompressed draw.io files can be large; the file is parsed in code, so a
   // generous limit is fine (the request body limit is set in app.ts).
   drawioXml: z.string().max(5_000_000, "The draw.io file is larger than 5 MB.").optional(),
@@ -316,12 +322,27 @@ workflowsRouter.post("/generate", async (req: Request, res: Response) => {
         ...(result.report ? { fidelity: result.report.status, failedChecks: result.report.items.filter((i) => i.status === "failed").length } : {}),
       },
     });
+    // Keep the verification report so the creator can re-open it later.
+    let savedReport = null;
+    if (result.report) {
+      try {
+        savedReport = await saveReport({
+          chatbotId,
+          userId: req.userId,
+          title: parsed.data.sourceName?.trim() || (isEdit ? "Edit build" : "Diagram build"),
+          report: result.report as any,
+        });
+      } catch (err) {
+        console.error("Saving AI report failed:", (err as Error)?.message ?? err);
+      }
+    }
     return res.json({
       ok: result.ok,
       definition,
       plan: result.plan ?? [],
       warnings: [...(result.errors ?? []), ...(result.warnings ?? [])],
       report: result.report ?? null,
+      reportId: savedReport?.id ?? null,
     });
   } catch (err: any) {
     const sizeMsg = diagramSizeError(err);

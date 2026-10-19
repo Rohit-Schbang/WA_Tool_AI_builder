@@ -421,6 +421,17 @@ export async function simulateBranches(def: Def, spec: FlowSpec, d: ParsedDiagra
         const field = String(node.config.field ?? "").replace(/[{}]/g, "").trim();
         const op = node.config.operator ?? "equals";
         const value = String(node.config.value ?? "");
+        // Presence checks (e.g. a validity check after a validated question).
+        if (field && (op === "is_not_empty" || op === "is_empty")) {
+          const cases = [["true", op === "is_not_empty" ? "sample" : ""], ["else", op === "is_not_empty" ? "" : "sample"]] as const;
+          for (const [label, v] of cases) {
+            const r = await exec(node, ctxFor({ [field]: v }, null));
+            const h = handleOf(r);
+            const next = nextNodeId(def, s.id, h);
+            add(h === label && next !== null ? "passed" : "failed", `“${s.title}” when ${field} is ${v ? "set" : "empty"} → ${title(next)}.`, s);
+          }
+          continue;
+        }
         if (!field || !["equals", "contains", "starts_with", "ends_with"].includes(op) || !value || /\{\{/.test(value)) {
           add("not_tested", `“${s.title}” (${op}${value ? ` “${value}”` : ""}) can't be simulated automatically.`, s);
           continue;

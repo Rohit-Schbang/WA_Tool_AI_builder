@@ -13,7 +13,7 @@ import {
   type FlowSpec,
 } from "./drawio.js";
 import { z } from "zod";
-import { KNOWN_TYPES } from "./capabilities.js";
+import { BUILDER_TYPES, toBuilderNode, toBuilderType } from "./capabilities.js";
 import {
   enforceSpec,
   checkFidelity,
@@ -66,10 +66,11 @@ Available node types and their config fields (use ONLY these):
     Do NOT include url/method/headers/body — the method, URL and body come from the chosen config/endpoint.
     Use an apiConfig NAME from the "Available API configs" list below; if none exist or none fit, leave apiConfig "" (the user picks one later).
     Has TWO outgoing edges: sourceHandle "true" (2xx success) and sourceHandle "else" (failure).
-- VALIDATE: check a value and branch. config: { mode: "regex"|"expression", value?: string (regex mode: the value to test, e.g. "{{email}}"),
-    pattern?: string (regex mode, e.g. "^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$"), expression?: string (JS using vars.x, expression mode) }
-    Has TWO outgoing edges: sourceHandle "true" (valid) and sourceHandle "else" (invalid).
 - WAIT: pause. config: { seconds: number }
+
+There is NO separate validation block. To check an answer's format (email, phone,
+number…), set validationType (and failureMessage) on the ASK_INPUT itself — it
+re-asks automatically until the answer is valid. Never invent other node types.
 
 Reference variables inside any text/url/body with double braces, e.g. {{name}}.
 `;
@@ -139,13 +140,18 @@ function repair(raw: any, opts: { partial?: boolean } = {}): GeneratedDefinition
       let id = n.id != null && String(n.id).trim() ? String(n.id).trim() : "";
       if (!id || used.has(id)) id = fresh(i);
       used.add(id);
-      const t = String(n.nodeType ?? "SEND_MESSAGE").toUpperCase();
+      // Only builder-palette types: VALIDATE/BUTTONS map to their palette twin.
+      const mapped = toBuilderNode({
+        nodeType: String(n.nodeType ?? "SEND_MESSAGE"),
+        config: (typeof n.config === "object" && n.config) || {},
+      });
+      const t = toBuilderType(mapped.nodeType);
       return {
         id,
-        nodeType: KNOWN_TYPES.has(t) ? t : "SEND_MESSAGE",
+        nodeType: BUILDER_TYPES.has(t) ? t : "SEND_MESSAGE",
         seq: i,
         position: { x: 0, y: i * 140 }, // dagre (or the draw.io layout) re-places this
-        config: (typeof n.config === "object" && n.config) || {},
+        config: mapped.config,
       };
     });
 
@@ -385,7 +391,7 @@ ${description ? `\nExtra context from the user (wording, intent):\n"""\n${descri
 
   // Normalise against the diagram: guarantees one START, every shape accounted
   // for (missing ones classified by the parser's hints), and stable node ids.
-  const spec = specFromPlan(plan, d, KNOWN_TYPES);
+  const spec = specFromPlan(plan, d, BUILDER_TYPES);
   return specToPlan(spec, d);
 }
 
@@ -766,7 +772,7 @@ async function generateFromDiagram(
   apiConfigs: any[] | undefined,
   warnings: string[]
 ): Promise<GenerateResult> {
-  const spec = specFromPlan(plan, d, KNOWN_TYPES);
+  const spec = specFromPlan(plan, d, BUILDER_TYPES);
   console.log(`[drawio] spec: ${spec.nodes.length} blocks, ${spec.edges.length} connections, ${spec.skipped.length} skipped`);
 
   let current = await verify(await buildFromSpec(description, spec, d, apiConfigs), spec, d);

@@ -29,7 +29,11 @@ interface LogOptions {
 const SAVE_WINDOW_MS = 10 * 60 * 1000;
 const lastSave = new Map<string, number>();
 
-export function logActivity(req: Request, action: ActivityAction, opts: LogOptions = {}): void {
+export function logActivity(
+  req: Request,
+  action: ActivityAction,
+  opts: LogOptions = {},
+): void {
   const userId = req.userId ?? null;
 
   if (action === "workflow.save" && userId && opts.chatbotId) {
@@ -43,7 +47,10 @@ export function logActivity(req: Request, action: ActivityAction, opts: LogOptio
   void (async () => {
     try {
       const user = userId
-        ? await prisma.user.findUnique({ where: { id: userId }, select: { email: true } })
+        ? await prisma.user.findUnique({
+            where: { id: userId },
+            select: { email: true },
+          })
         : null;
       await prisma.activityLog.create({
         data: {
@@ -56,12 +63,19 @@ export function logActivity(req: Request, action: ActivityAction, opts: LogOptio
         },
       });
     } catch (err) {
-      console.error("Activity log write failed:", (err as Error)?.message ?? err);
+      console.error(
+        "Activity log write failed:",
+        (err as Error)?.message ?? err,
+      );
     }
   })();
 }
 
-export async function listActivity(filter: { chatbotId?: string; limit?: number; before?: Date }) {
+export async function listActivity(filter: {
+  chatbotId?: string;
+  limit?: number;
+  before?: Date;
+}) {
   const limit = Math.min(Math.max(filter.limit ?? 50, 1), 200);
   return prisma.activityLog.findMany({
     where: {

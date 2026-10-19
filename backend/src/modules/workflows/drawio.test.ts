@@ -110,7 +110,7 @@ describe("parseDrawio", () => {
     assert.match(d.shapes.find((s) => s.id === "d_u")!.suggested, /^USER ACTION/);
     assert.match(d.shapes.find((s) => s.id === "d_b")!.suggested, /^SYSTEM EVENT/);
     assert.match(d.shapes.find((s) => s.id === "d_l")!.suggested, /^API_REQUEST/);
-    assert.equal(d.shapes.find((s) => s.id === "d_f")!.suggested, "VALIDATE");
+    assert.match(d.shapes.find((s) => s.id === "d_f")!.suggested, /^CONDITION/);
   });
 
   test("handles uncompressed files and garbage input", () => {
@@ -325,5 +325,28 @@ describe("simulated execution (real executors, no side effects)", () => {
     assert.ok(report.summary.connectionsVerified < report.summary.connectionsTotal);
     assert.equal(report.summary.mappedShapes, report.summary.sourceShapes);
     assert.ok(report.manualActions.some((m) => /Missing connection/.test(m)));
+  });
+});
+
+describe("builder-only node types", () => {
+  test("VALIDATE and BUTTONS map to their palette twins", async () => {
+    const { toBuilderNode, BUILDER_TYPES } = await import("./capabilities.js");
+    const v = toBuilderNode({ nodeType: "VALIDATE", config: { name: "Email valid?", mode: "regex", value: "{{email}}", pattern: "x" } });
+    assert.equal(v.nodeType, "CONDITION");
+    assert.deepEqual(v.config, { name: "Email valid?", field: "email", operator: "is_not_empty", value: "" });
+    const b = toBuilderNode({ nodeType: "BUTTONS", config: { text: "Pick", buttons: [{ id: "a", label: "A" }] } as any });
+    assert.equal(b.nodeType, "SEND_MESSAGE");
+    assert.equal(b.config.buttons[0].kind, "cta");
+    assert.ok(!BUILDER_TYPES.has("VALIDATE") && !BUILDER_TYPES.has("BUTTONS"));
+  });
+
+  test("a plan stage typed VALIDATE becomes a CONDITION block", async () => {
+    const { BUILDER_TYPES } = await import("./capabilities.js");
+    const d = parseDrawio(compressed(JOURNEY));
+    const plan = PLAN.map((s) => (s.title === "Email valid?" ? { ...s, nodeType: "VALIDATE" } : s));
+    const spec = specFromPlan(plan, d, BUILDER_TYPES);
+    const n = spec.nodes.find((x) => x.id === "d_f")!;
+    assert.equal(n.nodeType, "CONDITION");
+    assert.ok(!spec.nodes.some((x) => x.nodeType === "VALIDATE"));
   });
 });

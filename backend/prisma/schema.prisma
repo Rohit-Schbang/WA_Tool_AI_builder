@@ -54,6 +54,7 @@ model Chatbot {
   versions      WorkflowVersion[]
   connection    Connection?
   conversations Conversation[]
+  reports       AiReport[]
 
   @@index([ownerId])
 }
@@ -262,3 +263,21 @@ model Contact {
   @@index([ownerId])
 }
 
+
+// ---------------------------------------------------------------------------
+// AiReport — the verification report of an AI (draw.io) build, kept so the
+// creator can re-open it as a summary while finishing the journey.
+// ---------------------------------------------------------------------------
+model AiReport {
+  id             String   @id @default(cuid())
+  chatbotId      String
+  chatbot        Chatbot  @relation(fields: [chatbotId], references: [id], onDelete: Cascade)
+  title          String
+  status         String            // passed | warning | failed | not_tested
+  report         Json
+  createdById    String?
+  createdByEmail String?
+  createdAt      DateTime @default(now())
+
+  @@index([chatbotId, createdAt])
+}
