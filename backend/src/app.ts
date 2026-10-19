@@ -34,8 +34,18 @@ export function createApp() {
   app.set("trust proxy", 1);
 
   // --- Global middleware ---
-  // Allow the Next.js frontend (different port) to call this API.
-  app.use(cors({ origin: config.FRONTEND_ORIGIN, credentials: true }));
+  // Allow the Next.js frontend(s) to call this API. FRONTEND_ORIGIN may be a
+  // comma-separated list (e.g. "https://waaitool.vercel.app,http://localhost:3000").
+  // Trailing slashes and case are normalised so a stray "/" doesn't break CORS.
+  const normalizeOrigin = (o: string) => o.trim().replace(/\/+$/, "").toLowerCase();
+  const allowedOrigins = config.FRONTEND_ORIGIN.split(",").map(normalizeOrigin).filter(Boolean);
+  app.use(
+    cors({
+      // No Origin header = server-to-server / curl / Meta webhook → allow.
+      origin: (origin, cb) => cb(null, !origin || allowedOrigins.includes(normalizeOrigin(origin))),
+      credentials: true,
+    }),
+  );
   // Parse JSON request bodies into req.body. The `verify` hook also stashes the
   // RAW request bytes on req.rawBody — needed to verify Meta's webhook
   // X-Hub-Signature-256 HMAC, which is computed over the exact payload bytes
