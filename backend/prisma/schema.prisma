@@ -228,7 +228,7 @@ enum ExecutionStatus {
 // ---------------------------------------------------------------------------
 // ActivityLog — who did what, across chatbots and workflow versions.
 // No foreign keys on purpose: entries must survive the bot/user being deleted.
-// Reading it requires the ACTIVITY_LOG_API_KEY (see activity/routes.ts).
+// Any signed-in user can read it (see activity/routes.ts).
 // ---------------------------------------------------------------------------
 model ActivityLog {
   id        String   @id @default(cuid())

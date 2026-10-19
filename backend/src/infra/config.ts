@@ -53,10 +53,6 @@ const envSchema = z.object({
   // Comma-separated list of email domains allowed to sign up / log in.
   // Defaults to schbang.com.
   ALLOWED_EMAIL_DOMAINS: z.string().default("schbang.com"),
-
-  // Special access key required to VIEW the user activity log (sent from the
-  // UI as the x-activity-key header). When unset, viewing is disabled.
-  ACTIVITY_LOG_API_KEY: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);
