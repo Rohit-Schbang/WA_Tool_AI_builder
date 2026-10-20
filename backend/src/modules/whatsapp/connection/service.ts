@@ -11,9 +11,12 @@ export interface SafeConnection {
     phoneNumber: string | null;
     phoneNumberId: string | null;
     wabaId: string | null;
+    systemUserId: string | null;
+    systemUserName: string | null;
     status: string;
     hasAccessToken: boolean;
     hasAppSecret: boolean;
+    hasVerifyToken: boolean;
 }
 
 export function ToSafeConnection(c: Connection): SafeConnection {
@@ -24,9 +27,12 @@ export function ToSafeConnection(c: Connection): SafeConnection {
         phoneNumber: c.phoneNumber,
         phoneNumberId: c.phoneNumberId,
         wabaId: c.wabaId,
+        systemUserId: c.systemUserId,
+        systemUserName: c.systemUserName,
         status: c.status,
         hasAccessToken: c.accessToken !== null && c.accessToken !== "",
-        hasAppSecret: c.appSecret !== null && c.appSecret !== ""
+        hasAppSecret: c.appSecret !== null && c.appSecret !== "",
+        hasVerifyToken: c.verifyToken !== null && c.verifyToken !== ""
     }
 }
 
@@ -38,6 +44,8 @@ export interface ConnectionInput {
     phoneNumber?: string | null;
     phoneNumberId?: string | null;
     wabaId?: string | null;
+    systemUserId?: string | null;
+    systemUserName?: string | null;
     accessToken?: string | null;
     appId?: string | null;
     appSecret?: string | null;

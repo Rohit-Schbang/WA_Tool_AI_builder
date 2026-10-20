@@ -173,13 +173,58 @@ async function registerPhoneNumber(phoneNumberId: string, token: string): Promis
 export async function verifyManualCredentials(input: {
   accessToken: string;
   phoneNumberId: string;
-}): Promise<{ displayPhoneNumber?: string; verifiedName?: string }> {
-  const data = await graphFetch(
-    `${GRAPH()}/${input.phoneNumberId}?fields=display_phone_number,verified_name`,
-    { headers: { Authorization: `Bearer ${input.accessToken}` } },
-    "Verify credentials"
-  );
-  return { displayPhoneNumber: data?.display_phone_number, verifiedName: data?.verified_name };
+}): Promise<{ displayPhoneNumber?: string; verifiedName?: string; systemUserId?: string; systemUserName?: string }> {
+  const owner = await getTokenOwner(input.accessToken);
+  // A common mix-up: pasting the System User ID into the Phone Number ID field.
+  if (owner.id && owner.id === input.phoneNumberId) {
+    throw new EmbeddedSignupError(
+      "That ID is your System User ID, not a Phone Number ID. Copy the Phone Number ID from WhatsApp Manager → Phone numbers (or API Setup)."
+    );
+  }
+  let data: any;
+  try {
+    data = await graphFetch(
+      `${GRAPH()}/${input.phoneNumberId}?fields=display_phone_number,verified_name`,
+      { headers: { Authorization: `Bearer ${input.accessToken}` } },
+      "Verify credentials"
+    );
+  } catch (err) {
+    if (graphErrorCode(err) === 100) {
+      throw new EmbeddedSignupError(
+        "Meta doesn't recognise this Phone Number ID for this token. Check that it's the Phone Number ID (not the WABA or System User ID) and that the System User has this WhatsApp account assigned.",
+        (err as EmbeddedSignupError).detail
+      );
+    }
+    throw err;
+  }
+  if (!data?.display_phone_number) {
+    throw new EmbeddedSignupError("This ID isn't a WhatsApp phone number. Use the Phone Number ID from WhatsApp Manager.");
+  }
+  return {
+    displayPhoneNumber: data.display_phone_number,
+    verifiedName: data?.verified_name,
+    systemUserId: owner.id,
+    systemUserName: owner.name,
+  };
+}
+
+// Who owns an access token (the Meta System User / BISU). Best-effort: a token
+// without the needed permission just returns {}.
+export async function getTokenOwner(token: string): Promise<{ id?: string; name?: string }> {
+  try {
+    const me = await graphFetch(`${GRAPH()}/me?fields=id,name`, { headers: { Authorization: `Bearer ${token}` } }, "Read token owner");
+    return { id: me?.id ? String(me.id) : undefined, name: me?.name };
+  } catch (err) {
+    // An invalid/expired token must surface as a real failure.
+    if (graphErrorCode(err) === 190) throw err;
+    return {};
+  }
+}
+
+// Graph API error code (190 = invalid/expired token, 100 = bad id/field).
+function graphErrorCode(err: unknown): number | undefined {
+  const code = ((err as EmbeddedSignupError)?.detail as any)?.error?.code;
+  return typeof code === "number" ? code : undefined;
 }
 
 // Read the phone number's current platform + verification status. Used both at
@@ -223,6 +268,7 @@ export async function completeEmbeddedSignup(
 
   await subscribeApp(input.wabaId, accessToken);
   await registerPhoneNumber(input.phoneNumberId, accessToken);
+  const owner = await getTokenOwner(accessToken);
 
   // Persist. accessToken here is the BISU token used to send messages.
   return upsertConnection(chatbotId, {
@@ -231,6 +277,8 @@ export async function completeEmbeddedSignup(
     phoneNumberId: input.phoneNumberId,
     phoneNumber: phone.displayPhoneNumber,
     businessName: waba.name ?? phone.verifiedName,
+    systemUserId: owner.id ?? null,
+    systemUserName: owner.name ?? null,
     appId: config.META_APP_ID,
     appSecret: config.META_APP_SECRET,
     status: "CONNECTED",
@@ -251,6 +299,8 @@ export interface ConnectionHealth {
   connected: boolean;
   status: string;               // our ConnectionStatus (CONNECTED / DISCONNECTED / ERROR)
   phoneNumber: string | null;
+  phoneNumberId: string | null;
+  systemUserId: string | null;
   businessName: string | null;
   qualityRating: string | null;        // GREEN / YELLOW / RED
   codeVerificationStatus: string | null; // VERIFIED / NOT_VERIFIED / EXPIRED
@@ -265,6 +315,8 @@ function healthFromRow(c: Connection, live: boolean, error: string | null): Conn
     connected: c.status === "CONNECTED",
     status: c.status,
     phoneNumber: c.phoneNumber,
+    phoneNumberId: c.phoneNumberId,
+    systemUserId: c.systemUserId,
     businessName: c.businessName,
     qualityRating: c.qualityRating,
     codeVerificationStatus: c.codeVerificationStatus,
@@ -281,11 +333,14 @@ export async function getConnectionHealth(chatbotId: string): Promise<Connection
   const conn = await getConnection(chatbotId);
   if (!conn) return null;
 
-  // No token / not connected → nothing to poll; return the stored snapshot.
-  if (!conn.accessToken || !conn.phoneNumberId || conn.status !== "CONNECTED") {
+  // No credentials → nothing to poll; return the stored snapshot.
+  if (!conn.accessToken || !conn.phoneNumberId) {
     return healthFromRow(conn, false, null);
   }
 
+  // Credentials exist: ask Meta even if the stored status says otherwise, so a
+  // number that works is shown as CONNECTED (the stored status can go stale,
+  // e.g. after an earlier failed save).
   try {
     const s = await getPhoneStatus(conn.phoneNumberId, conn.accessToken);
     // Persist the fresh values so the last-known snapshot survives token/network
@@ -293,6 +348,7 @@ export async function getConnectionHealth(chatbotId: string): Promise<Connection
     const updated = await prisma.connection.update({
       where: { chatbotId },
       data: {
+        status: "CONNECTED",
         qualityRating: s.quality ?? conn.qualityRating,
         codeVerificationStatus: s.status ?? conn.codeVerificationStatus,
         nameStatus: s.nameStatus ?? conn.nameStatus,
@@ -300,8 +356,26 @@ export async function getConnectionHealth(chatbotId: string): Promise<Connection
         healthCheckedAt: new Date(),
       },
     });
+    // Backfill the token owner for connections saved before it was recorded.
+    if (!updated.systemUserId) {
+      const owner = await getTokenOwner(conn.accessToken).catch(() => ({} as { id?: string; name?: string }));
+      if (owner.id) {
+        const withOwner = await prisma.connection.update({
+          where: { chatbotId },
+          data: { systemUserId: owner.id, systemUserName: owner.name ?? null },
+        });
+        return healthFromRow(withOwner, true, null);
+      }
+    }
     return healthFromRow(updated, true, null);
   } catch (err) {
+    const code = graphErrorCode(err);
+    // Only a definitive answer from Meta (token invalid / id unknown) marks the
+    // connection broken; network blips keep the last-known status.
+    if ((code === 190 || code === 100) && conn.status !== "ERROR") {
+      const updated = await prisma.connection.update({ where: { chatbotId }, data: { status: "ERROR" } });
+      return healthFromRow(updated, false, code === 190 ? "The access token is invalid or expired. Reconnect to Meta." : "Meta doesn't recognise this Phone Number ID for this token.");
+    }
     // Live fetch failed — surface the cached values with an error note so the
     // dashboard can show "last checked …" instead of going blank.
     const msg = err instanceof EmbeddedSignupError ? err.message : "Couldn't reach Meta for a live status.";

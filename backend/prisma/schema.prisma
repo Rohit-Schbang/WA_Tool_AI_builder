@@ -107,6 +107,10 @@ model Connection {
   phoneNumber    String?
   phoneNumberId  String?           // Meta "Phone Number ID" used to send messages
   wabaId         String?           // WhatsApp Business Account ID
+  // Owner of the access token (Meta System User / BISU), read from Graph /me.
+  // Not a secret, and never the same thing as phoneNumberId.
+  systemUserId   String?
+  systemUserName String?
   status         ConnectionStatus @default(DISCONNECTED)
 
   // Number health — cached from Meta so the dashboard can show a live-ish

@@ -118,9 +118,24 @@ export async function handleInboundMessage(
         })
     }
 
-    // IF the conversation already completed, dont't reprocess
-    if (conversation.status === "COMPLETED") {
-        return { status: "conversation_completed" }
+    // A finished (or failed) journey restarts when the user sends the trigger
+    // keyword again (e.g. "Hi"): same conversation row, so the message history
+    // is kept, but a fresh run from START on the current live version with
+    // fresh variables. Any other message after the end is ignored as before.
+    if (conversation.status === "COMPLETED" || conversation.status === "FAILED") {
+        const startNode = definition.nodes.find((node) => node.nodeType === "START");
+        if (!opts.bypassTrigger && !matchesTrigger(startNode, text)) {
+            return { status: "conversation_completed" }
+        }
+        conversation = await prisma.conversation.update({
+            where: { id: conversation.id },
+            data: {
+                status: "ACTIVE",
+                currentNodeId: null,
+                workflowVersionId: version.id,
+                variables: seedVariableDefaults(definition),
+            },
+        })
     }
 
        // 3. Build the execution context from saved state.
