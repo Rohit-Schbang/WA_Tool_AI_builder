@@ -350,3 +350,47 @@ describe("builder-only node types", () => {
     assert.ok(!spec.nodes.some((x) => x.nodeType === "VALIDATE"));
   });
 });
+
+describe("validator: list options", () => {
+  test("every list row must be connected", async () => {
+    const { validateWorkflow } = await import("./validator.js");
+    const def: any = {
+      nodes: [
+        { id: "start", nodeType: "START", config: {} },
+        { id: "l", nodeType: "LIST", seq: 1, config: { text: "Pick", rows: [{ id: "a", label: "Sales" }, { id: "b", label: "Support" }] } },
+        { id: "m", nodeType: "SEND_MESSAGE", seq: 1, config: { text: "Hi" } },
+      ],
+      edges: [
+        { id: "e1", source: "start", target: "l", sourceHandle: null },
+        { id: "e2", source: "l", target: "m", sourceHandle: "a" },
+      ],
+    };
+    const errs = validateWorkflow(def).errors.map((e) => e.message);
+    assert.ok(errs.some((m) => /"Support" is not connected/.test(m)));
+    assert.ok(!errs.some((m) => /"Sales" is not connected/.test(m)));
+    def.edges.push({ id: "e3", source: "l", target: "m", sourceHandle: "b" });
+    assert.equal(validateWorkflow(def).errors.length, 0);
+  });
+});
+
+describe("validator: send message buttons", () => {
+  test("every reply button must be connected; URL buttons are ignored", async () => {
+    const { validateWorkflow } = await import("./validator.js");
+    const def: any = {
+      nodes: [
+        { id: "start", nodeType: "START", config: {} },
+        { id: "s", nodeType: "SEND_MESSAGE", seq: 1, config: { text: "Pick", buttons: [
+          { id: "y", label: "Yes", kind: "cta" }, { id: "n", label: "No", kind: "cta" }, { id: "w", label: "Site", kind: "url", url: "https://x.y" },
+        ] } },
+        { id: "m", nodeType: "SEND_MESSAGE", seq: 2, config: { text: "Ok" } },
+      ],
+      edges: [
+        { id: "e1", source: "start", target: "s", sourceHandle: null },
+        { id: "e2", source: "s", target: "m", sourceHandle: "y" },
+      ],
+    };
+    const errs = validateWorkflow(def).errors.map((e) => e.message);
+    assert.ok(errs.some((m) => /button "No" is not connected/.test(m)));
+    assert.ok(!errs.some((m) => /"Site"|"Yes"/.test(m)));
+  });
+});

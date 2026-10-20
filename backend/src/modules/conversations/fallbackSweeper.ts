@@ -4,6 +4,7 @@ import { WorkflowDefinition, ExecutionContext } from "../runtime/types.js";
 import { WhatsAppAdapter, ConsoleAdapter } from "../messaging/adapters.js";
 import { LoggingAdapter } from "../messaging/loggingAdapters.js";
 import type { MessagingAdapter } from "../runtime/types.js";
+import { waitUntilKey } from "../runtime/executors.js";
 
 // #11-adjacent (no-reply fallback): a lightweight in-process sweeper that
 // periodically finds conversations stuck WAITING_FOR_INPUT past their node's
@@ -47,6 +48,28 @@ async function sweepOnce() {
 
       const definition = version.definition as unknown as WorkflowDefinition;
       const node = definition.nodes.find((n) => n.id === convo.currentNodeId);
+
+      // A long Delay (WAIT) node that is now due: continue the flow from it.
+      if (node?.nodeType === "WAIT" && convo.currentNodeId) {
+        const vars = (convo.variables as Record<string, any>) ?? {};
+        const due = Number(vars[waitUntilKey(convo.currentNodeId)]);
+        if (!Number.isFinite(due) || Date.now() < due) continue;
+        const messaging = new LoggingAdapter(await buildAdapter(convo.chatbotId), convo.id);
+        const context: ExecutionContext = { userId: convo.waUserId, variables: vars, incomingText: null, messaging };
+        const result = await runEngine(definition, convo.currentNodeId, context);
+        await prisma.conversation.update({
+          where: { id: convo.id },
+          data: {
+            currentNodeId: result.pausedAtNodeId,
+            variables: context.variables,
+            status: result.status === "completed" ? "COMPLETED" : "WAITING_FOR_INPUT",
+            lastMessageAt: new Date(),
+          },
+        });
+        console.log(`[delay] resumed conversation ${convo.id} after delay node ${node.id}`);
+        continue;
+      }
+
       const fb = (node?.config as any)?.fallback;
       if (!fb?.enabled || !convo.currentNodeId) continue;
 

@@ -1,0 +1,296 @@
+{
+  "label": "optimized",
+  "model": "gemini-3.8-flash",
+  "thinking": {
+    "plan": "low",
+    "build": "low",
+    "repair": "low",
+    "repairFinal": "high"
+  },
+  "results": [
+    {
+      "file": "sample_appointment_booking_60_steps.drawio",
+      "error": null,
+      "planStages": 62,
+      "nodes": 74,
+      "seconds": {
+        "plan": 27.102,
+        "build": 25.68,
+        "total": 52.782
+      },
+      "tokens": {
+        "all": {
+          "calls": 7,
+          "prompt": 27096,
+          "thought": 0,
+          "output": 15419,
+          "total": 42515,
+          "ms": 97106,
+          "failed": 0
+        },
+        "byStep": {
+          "plan": {
+            "calls": 1,
+            "prompt": 7317,
+            "thought": 0,
+            "output": 4511,
+            "total": 11828,
+            "ms": 27074,
+            "failed": 0
+          },
+          "build": {
+            "calls": 6,
+            "prompt": 19779,
+            "thought": 0,
+            "output": 10908,
+            "total": 30687,
+            "ms": 70032,
+            "failed": 0
+          }
+        }
+      },
+      "quality": {
+        "status": "warning",
+        "failedChecks": 0,
+        "warnings": 8,
+        "connections": "60/60",
+        "messages": "14/14",
+        "questions": "14/14",
+        "branches": "13/14",
+        "events": "0/0",
+        "sim": "35 pass / 0 fail / 0 n/t",
+        "shapesMapped": "61/61",
+        "repairs": 0
+      }
+    },
+    {
+      "file": "sample_customer_support_45_steps.drawio",
+      "error": null,
+      "planStages": 46,
+      "nodes": 55,
+      "seconds": {
+        "plan": 31.936,
+        "build": 13.346,
+        "total": 45.282
+      },
+      "tokens": {
+        "all": {
+          "calls": 5,
+          "prompt": 18674,
+          "thought": 0,
+          "output": 11400,
+          "total": 30074,
+          "ms": 82057,
+          "failed": 0
+        },
+        "byStep": {
+          "plan": {
+            "calls": 1,
+            "prompt": 6058,
+            "thought": 0,
+            "output": 3464,
+            "total": 9522,
+            "ms": 31932,
+            "failed": 0
+          },
+          "build": {
+            "calls": 4,
+            "prompt": 12616,
+            "thought": 0,
+            "output": 7936,
+            "total": 20552,
+            "ms": 50125,
+            "failed": 0
+          }
+        }
+      },
+      "quality": {
+        "status": "warning",
+        "failedChecks": 0,
+        "warnings": 11,
+        "connections": "44/44",
+        "messages": "9/9",
+        "questions": "10/10",
+        "branches": "10/10",
+        "events": "0/0",
+        "sim": "23 pass / 0 fail / 1 n/t",
+        "shapesMapped": "46/46",
+        "repairs": 0
+      }
+    },
+    {
+      "file": "sample_customer_survey_85_steps.drawio",
+      "error": null,
+      "planStages": 87,
+      "nodes": 101,
+      "seconds": {
+        "plan": 40.175,
+        "build": 32.937,
+        "total": 73.112
+      },
+      "tokens": {
+        "all": {
+          "calls": 10,
+          "prompt": 42726,
+          "thought": 0,
+          "output": 21417,
+          "total": 64143,
+          "ms": 140972,
+          "failed": 0
+        },
+        "byStep": {
+          "plan": {
+            "calls": 1,
+            "prompt": 9473,
+            "thought": 0,
+            "output": 6459,
+            "total": 15932,
+            "ms": 40170,
+            "failed": 0
+          },
+          "build": {
+            "calls": 8,
+            "prompt": 29718,
+            "thought": 0,
+            "output": 14219,
+            "total": 43937,
+            "ms": 94178,
+            "failed": 0
+          },
+          "repair": {
+            "calls": 1,
+            "prompt": 3535,
+            "thought": 0,
+            "output": 739,
+            "total": 4274,
+            "ms": 6624,
+            "failed": 0
+          }
+        }
+      },
+      "quality": {
+        "status": "warning",
+        "failedChecks": 0,
+        "warnings": 12,
+        "connections": "85/85",
+        "messages": "20/20",
+        "questions": "20/20",
+        "branches": "18/21",
+        "events": "0/0",
+        "sim": "46 pass / 0 fail / 0 n/t",
+        "shapesMapped": "86/86",
+        "repairs": 1
+      }
+    },
+    {
+      "file": "sample_ecommerce_assistant_72_steps.drawio",
+      "error": null,
+      "planStages": 74,
+      "nodes": 89,
+      "seconds": {
+        "plan": 30.879,
+        "build": 53.232,
+        "total": 84.111
+      },
+      "tokens": {
+        "all": {
+          "calls": 8,
+          "prompt": 32375,
+          "thought": 0,
+          "output": 18038,
+          "total": 50413,
+          "ms": 152892,
+          "failed": 0
+        },
+        "byStep": {
+          "plan": {
+            "calls": 1,
+            "prompt": 8355,
+            "thought": 0,
+            "output": 5295,
+            "total": 13650,
+            "ms": 30875,
+            "failed": 0
+          },
+          "build": {
+            "calls": 7,
+            "prompt": 24020,
+            "thought": 0,
+            "output": 12743,
+            "total": 36763,
+            "ms": 122017,
+            "failed": 0
+          }
+        }
+      },
+      "quality": {
+        "status": "warning",
+        "failedChecks": 0,
+        "warnings": 10,
+        "connections": "72/72",
+        "messages": "16/16",
+        "questions": "16/16",
+        "branches": "16/16",
+        "events": "0/0",
+        "sim": "36 pass / 0 fail / 2 n/t",
+        "shapesMapped": "73/73",
+        "repairs": 0
+      }
+    },
+    {
+      "file": "sample_lead_capture_35_steps.drawio",
+      "error": null,
+      "planStages": 37,
+      "nodes": 44,
+      "seconds": {
+        "plan": 17.414,
+        "build": 16.229,
+        "total": 33.643
+      },
+      "tokens": {
+        "all": {
+          "calls": 4,
+          "prompt": 14380,
+          "thought": 0,
+          "output": 8988,
+          "total": 23368,
+          "ms": 59592,
+          "failed": 0
+        },
+        "byStep": {
+          "plan": {
+            "calls": 1,
+            "prompt": 5215,
+            "thought": 0,
+            "output": 2745,
+            "total": 7960,
+            "ms": 17410,
+            "failed": 0
+          },
+          "build": {
+            "calls": 3,
+            "prompt": 9165,
+            "thought": 0,
+            "output": 6243,
+            "total": 15408,
+            "ms": 42182,
+            "failed": 0
+          }
+        }
+      },
+      "quality": {
+        "status": "warning",
+        "failedChecks": 0,
+        "warnings": 4,
+        "connections": "35/35",
+        "messages": "8/8",
+        "questions": "8/8",
+        "branches": "8/8",
+        "events": "0/0",
+        "sim": "20 pass / 0 fail / 0 n/t",
+        "shapesMapped": "36/36",
+        "repairs": 0
+      }
+    }
+  ]
+}

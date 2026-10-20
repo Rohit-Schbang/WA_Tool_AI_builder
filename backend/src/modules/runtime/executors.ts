@@ -260,12 +260,40 @@ const setVariable: NodeExecutor = async (node, ctx) => {
   return { action: "next" };
 };
 
-const wait: NodeExecutor = async () => {
-  // For the MVP, WAIT simply pauses execution until the next message.
+// Delays up to this long are waited out in-process, then the flow continues
+// on its own (the webhook has already been acknowledged, and the test chat
+// gets the follow-up messages in the same response).
+export const INLINE_DELAY_MAX_SECONDS = 30;
+const MAX_DELAY_SECONDS = 86400;
+
+export const waitUntilKey = (nodeId: string) => `__waitUntil_${nodeId}`;
+
+const wait: NodeExecutor = async (node, ctx) => {
+  const seconds = Math.max(0, Math.min(MAX_DELAY_SECONDS, Number(node.config.seconds) || 0));
+  const key = waitUntilKey(node.id);
+
+  // Resuming a longer delay (sweeper, or a user message after it's due).
+  if (ctx.variables[key] != null) {
+    if (Date.now() < Number(ctx.variables[key])) return { action: "wait" }; // not due yet: ignore the message
+    delete ctx.variables[key];
+    return { action: "next" };
+  }
+
+  if (seconds <= INLINE_DELAY_MAX_SECONDS) {
+    if (seconds > 0) await new Promise((r) => setTimeout(r, seconds * 1000));
+    return { action: "next" };
+  }
+
+  // Longer delay: pause here; fallbackSweeper resumes the flow when it's due.
+  ctx.variables[key] = Date.now() + seconds * 1000;
   return { action: "wait" };
 };
 
-const end: NodeExecutor = async () => {
+// End of journey: optionally send a closing message, then finish. The user can
+// restart later with the trigger keyword (e.g. "Hi").
+const end: NodeExecutor = async (node, ctx) => {
+  const text = String(node.config?.text ?? "").trim();
+  if (text) await ctx.messaging.sendText(ctx.userId, interpolate(text, ctx.variables));
   return { action: "end" };
 };
 

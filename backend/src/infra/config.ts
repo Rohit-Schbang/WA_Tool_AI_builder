@@ -23,6 +23,21 @@ const envSchema = z.object({
   // Comma-separated list of allowed browser origins (no trailing slash needed).
   FRONTEND_ORIGIN: z.string().default("https://waaitool.vercel.app"),
   GEMINI_API_KEY: z.string().optional(),
+  GEMINI_MODEL: z.string().default("gemini-3.8-flash"),
+
+  // --- AI thinking caps (per pipeline step) ---
+  // "minimal" | "low" | "medium" | "high" | "default" (model decides, uncapped)
+  // or a number = exact thinking-token budget. Gemini 3 models take a level,
+  // Gemini 2.5 models take a budget; aiProvider converts between them.
+  AI_THINKING_PLAN: z.string().default("low"),     // classify the diagram / plan stages
+  AI_THINKING_BUILD: z.string().default("low"),    // build batches (fill in a fixed spec)
+  AI_THINKING_REPAIR: z.string().default("low"),   // targeted repairs (final attempt escalates)
+  AI_THINKING_REPAIR_FINAL: z.string().default("high"),
+  AI_THINKING_REPLY: z.string().default("low"),    // AI Reply node in live chats
+  // Parallel Gemini calls when building/repairing in batches (mind rate limits).
+  AI_BUILD_CONCURRENCY: z.coerce.number().int().min(1).max(8).default(4),
+  // Targeted repair passes after verification (the last one uses REPAIR_FINAL).
+  AI_MAX_REPAIRS: z.coerce.number().int().min(0).max(5).default(2),
 
   // --- WhatsApp Embedded Signup (Meta) ---
 

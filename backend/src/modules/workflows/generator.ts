@@ -13,6 +13,8 @@ import {
   type FlowSpec,
 } from "./drawio.js";
 import { z } from "zod";
+import crypto from "crypto";
+import { config } from "../../infra/config.js";
 import { BUILDER_TYPES, toBuilderNode, toBuilderType } from "./capabilities.js";
 import {
   enforceSpec,
@@ -320,13 +322,35 @@ export function summarizeDiagram(d: ParsedDiagram): DiagramSummary {
 // ---------------------------------------------------------------------------
 // STEP 1 — PLAN
 // ---------------------------------------------------------------------------
+
+// Small in-memory plan cache (per server instance).
+const PLAN_CACHE_TTL_MS = 60 * 60 * 1000;
+const PLAN_CACHE_MAX = 30;
+const planCache = new Map<string, { at: number; plan: PlanStage[] }>();
 async function planJourney(
   description: string,
   diagram: ParsedDiagram | null,
   edit?: EditContext,
   apiConfigs?: any[]
 ): Promise<PlanStage[]> {
-  if (diagram && diagram.shapes.length && !edit) return planFromDiagram(description, diagram, apiConfigs);
+  if (diagram && diagram.shapes.length && !edit) {
+    // Same diagram + same description + same API configs -> same plan. Reuse
+    // it (e.g. "Start over" / re-planning) instead of paying for a new call.
+    const key = crypto.createHash("sha256")
+      .update(JSON.stringify([description, diagram.shapes, diagram.edges, (apiConfigs ?? []).map((c: any) => c?.name)]))
+      .digest("hex");
+    const hit = planCache.get(key);
+    if (hit && Date.now() - hit.at < PLAN_CACHE_TTL_MS) {
+      console.log("[drawio] plan cache hit");
+      return structuredClone(hit.plan);
+    }
+    const plan = await planFromDiagram(description, diagram, apiConfigs);
+    if (plan.length) {
+      planCache.set(key, { at: Date.now(), plan: structuredClone(plan) });
+      if (planCache.size > PLAN_CACHE_MAX) planCache.delete(planCache.keys().next().value!);
+    }
+    return plan;
+  }
 
   let p = `You are an expert WhatsApp chatbot flow architect. Before building anything,
 PLAN the journey as an ordered list of stages (like a coding agent writing TODOs).
@@ -344,7 +368,7 @@ Start the plan with the START node. Be complete but concise.\n`;
   if (description) p += `\nUser's description:\n"""\n${description}\n"""\n`;
   p += editContextBlock(edit);
 
-  const raw = await generateJson(p);
+  const raw = await generateJson(p, { step: "plan" });
   return Array.isArray(raw?.plan) ? raw.plan : [];
 }
 
@@ -382,7 +406,7 @@ ${description ? `\nExtra context from the user (wording, intent):\n"""\n${descri
 
   let raw: any;
   try {
-    raw = await generateJson(p, { temperature: 0.2 });
+    raw = await generateJson(p, { temperature: 0.2, step: "plan" });
   } catch (err) {
     if (isTruncation(err)) throw new Error(`PLAN_TOO_LARGE:${d.shapes.length}`);
     throw err;
@@ -448,7 +472,7 @@ Original user description (for wording of messages etc.):
   if (fixErrors && fixErrors.length) {
     p += `\nYour previous build failed checks with these errors — fix them and return corrected JSON:\n- ${fixErrors.join("\n- ")}\n`;
   }
-  return repair(await generateJson(p));
+  return repair(await generateJson(p, { step: fixErrors?.length ? "fix" : "build" }));
 }
 
 // ---------------------------------------------------------------------------
@@ -459,7 +483,7 @@ Original user description (for wording of messages etc.):
 // A batch that still gets cut off is split in half and retried.
 // ---------------------------------------------------------------------------
 export const BUILD_BATCH_SIZE = 12;   // blocks per AI call (~5–8k output tokens)
-const BUILD_CONCURRENCY = 3;          // parallel AI calls
+const BUILD_CONCURRENCY = config.AI_BUILD_CONCURRENCY; // parallel AI calls
 
 const isTruncation = (err: any) => /AI_OUTPUT_TRUNCATED|invalid JSON/i.test(String(err?.message ?? err));
 
@@ -532,7 +556,7 @@ ${description ? `\nUser's extra context (wording, intent):\n"""\n${description}\
 async function buildFromSpec(description: string, spec: FlowSpec, d: ParsedDiagram, apiConfigs?: any[]): Promise<GeneratedDefinition> {
   const buildIds = async (ids: string[]): Promise<GeneratedDefinition[]> => {
     try {
-      const raw = await generateJson(batchPrompt(description, spec, d, new Set(ids), apiConfigs), { temperature: 0.2 });
+      const raw = await generateJson(batchPrompt(description, spec, d, new Set(ids), apiConfigs), { temperature: 0.2, step: "build" });
       return [repair(raw, { partial: true })];
     } catch (err) {
       if (isTruncation(err) && ids.length > 1) {
@@ -560,7 +584,8 @@ async function fixBlocks(
   spec: FlowSpec,
   d: ParsedDiagram,
   description: string,
-  apiConfigs?: any[]
+  apiConfigs?: any[],
+  final = false // last attempt: more thinking, only for what still fails
 ): Promise<GeneratedDefinition> {
   const failed = items.filter((i) => i.status === "failed");
   const specIds = new Set(spec.nodes.map((n) => n.id));
@@ -577,7 +602,7 @@ async function fixBlocks(
     };
     const problems = failed.filter((i) => !i.nodeId || set.has(i.nodeId)).map((i) => `[${i.category}] ${i.message}`);
     const extra = `\nTHESE BLOCKS WERE BUILT BEFORE BUT FAILED VERIFICATION. Fix exactly these problems:\n- ${problems.join("\n- ")}\n\nCURRENT JSON OF THESE BLOCKS:\n${JSON.stringify(current, null, 2)}\n`;
-    const raw = await generateJson(batchPrompt(description, spec, d, set, apiConfigs, extra), { temperature: 0.1 });
+    const raw = await generateJson(batchPrompt(description, spec, d, set, apiConfigs, extra), { temperature: 0.1, step: final ? "repair_final" : "repair" });
     return repair(raw, { partial: true });
   }));
 
@@ -607,29 +632,9 @@ PROBLEMS TO FIX:
 CURRENT WORKFLOW JSON:
 ${JSON.stringify({ variables: def.variables, nodes: def.nodes.map((n) => ({ id: n.id, nodeType: n.nodeType, config: n.config })), edges: def.edges }, null, 2)}
 `;
-  return repair(await generateJson(p, { temperature: 0.1 }));
+  return repair(await generateJson(p, { temperature: 0.1, step: "fix" }));
 }
 
-
-// QC (description mode only): a model self-review against the plan.
-async function qcReview(plan: PlanStage[], def: GeneratedDefinition): Promise<GeneratedDefinition> {
-  const p = `You are doing QC on a generated WhatsApp workflow. Compare the PLAN to the built
-JSON. Ensure: every plan stage exists as a node; every branch (buttons, list
-rows, condition true/else, api success/failure) has a matching outgoing edge;
-no edge targets the START node; all referenced {{variables}} are declared.
-Fix any problems and return the corrected workflow as STRICT JSON in the same
-shape. If it's already correct, return it unchanged.
-
-${RULES}
-
-PLAN:
-${JSON.stringify(plan, null, 2)}
-
-BUILT JSON:
-${JSON.stringify({ variables: def.variables, nodes: def.nodes.map(n => ({ id: n.id, nodeType: n.nodeType, config: n.config })), edges: def.edges }, null, 2)}
-`;
-  return repair(await generateJson(p));
-}
 
 // EDIT BUILD — apply the approved change-plan to the EXISTING flow as a PATCH,
 // preserving the ids of nodes that stay (so the frontend keeps their positions).
@@ -662,7 +667,7 @@ Change instruction (for wording): """\n${edit.editInstruction}\n"""\n`;
   if (fixErrors && fixErrors.length) {
     p += `\nYour previous patch failed checks with these errors — fix them and return corrected JSON:\n- ${fixErrors.join("\n- ")}\n`;
   }
-  return repair(await generateJson(p));
+  return repair(await generateJson(p, { step: "patch" }));
 }
 
 // ---------------------------------------------------------------------------
@@ -725,12 +730,9 @@ export async function generateJourney(
   if (edit) {
     def = await patchBuild(edit, plan, undefined, apiConfigs);
   } else {
+    // (The old AI self-review pass was removed: it re-sent the whole flow for
+    // little gain. validateWorkflow + one targeted fix below covers it.)
     def = await buildFromPlan(description, plan, undefined, apiConfigs);
-    try {
-      const reviewed = await qcReview(plan, def);
-      // Never accept a QC pass that loses nodes.
-      if (reviewed.nodes.length >= def.nodes.length) def = reviewed;
-    } catch { /* keep the pre-QC build */ }
   }
 
   // 3) VALIDATE + one repair pass.
@@ -750,8 +752,9 @@ export async function generateJourney(
     : { ok: true, definition: def, plan, warnings };
 }
 
-// Max targeted AI repairs after fidelity validation (bounded correction loop).
-const MAX_REPAIRS = 3;
+// Max targeted AI repairs after fidelity validation: one low-thinking pass,
+// then one final higher-thinking pass on whatever still fails.
+const MAX_REPAIRS = config.AI_MAX_REPAIRS;
 
 async function verify(def: GeneratedDefinition, spec: FlowSpec, d: ParsedDiagram) {
   const enforced = enforceSpec(def, spec, d);
@@ -779,23 +782,27 @@ async function generateFromDiagram(
   const corrections = [...current.corrections];
   let attempts = 0;
 
+  // Escalating repair: a cheap low-thinking pass first; whatever still fails
+  // gets ONE final pass with more thinking (AI_THINKING_REPAIR_FINAL).
   while (failedCount(current.items) > 0 && attempts < MAX_REPAIRS) {
     attempts++;
+    const final = attempts === MAX_REPAIRS;
     const problems = repairableProblems(current.items);
-    console.log(`[drawio] repair ${attempts}/${MAX_REPAIRS}: ${problems.length} failed check(s)`);
+    console.log(`[drawio] repair ${attempts}/${MAX_REPAIRS}${final ? " (final)" : ""}: ${problems.length} failed check(s)`);
     try {
-      const candidate = await verify(await fixBlocks(current.def, current.items, spec, d, description, apiConfigs), spec, d);
+      const candidate = await verify(await fixBlocks(current.def, current.items, spec, d, description, apiConfigs, final), spec, d);
       // Only keep a repair that strictly reduces failures (never regress).
       if (failedCount(candidate.items) < failedCount(current.items)) {
         current = candidate;
         corrections.push(...candidate.corrections);
       } else {
-        console.log(`[drawio] repair ${attempts} didn't improve (${failedCount(candidate.items)} vs ${failedCount(current.items)} failed); stopping`);
-        break;
+        console.log(`[drawio] repair ${attempts} didn't improve (${failedCount(candidate.items)} vs ${failedCount(current.items)} failed)`);
+        // A cheap pass that didn't help still leaves the final, stronger one.
+        if (final) break;
       }
     } catch (err: any) {
       console.warn(`[drawio] repair ${attempts} failed:`, err?.message ?? err);
-      break;
+      if (final) break;
     }
   }
 

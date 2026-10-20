@@ -170,5 +170,32 @@ export function validateWorkflow(def: WorkflowDefinition): ValidationResult {
         }
     }
 
+    // 7. LIST rows and Send Message reply (cta) buttons: EVERY option must lead
+    //    somewhere — otherwise a user who picks it hits a dead end and the bot
+    //    goes silent. (URL buttons just open a link, so they're not checked.)
+    for (const node of nodes) {
+        const isList = node.nodeType === "LIST";
+        const isButtons = node.nodeType === "SEND_MESSAGE" || node.nodeType === "BUTTONS";
+        if (!isList && !isButtons) continue;
+        const name = nodeName(node);
+        const rows: { id?: string; label?: string }[] = isList
+            ? (Array.isArray(node.config?.rows) ? node.config.rows : [])
+            : (Array.isArray(node.config?.buttons) ? node.config.buttons : [])
+                .filter((b: any) => node.nodeType === "BUTTONS" || (b?.kind ?? "cta") === "cta");
+        if (rows.length === 0) {
+            if (isList) push(`"${name}" has no list options — add at least one.`, node.id)
+            continue;
+        }
+        const connected = new Set(
+            edges.filter((e) => e.source === node.id && e.sourceHandle && nodeIds.has(e.target)).map((e) => e.sourceHandle)
+        );
+        rows.forEach((row, i) => {
+            if (!row?.id || !connected.has(row.id)) {
+                const label = String(row?.label ?? "").trim() || `Option ${i + 1}`;
+                push(`"${name}": the ${isList ? "option" : "button"} "${label}" is not connected to any node.`, node.id)
+            }
+        });
+    }
+
     return { valid: errors.length === 0, errors }
 }
