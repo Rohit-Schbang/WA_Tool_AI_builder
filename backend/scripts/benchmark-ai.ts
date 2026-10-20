@@ -67,6 +67,7 @@ async function runOne(file: string) {
       sim: `${s.testsPassed} pass / ${s.testsFailed} fail / ${s.testsNotRun} n/t`,
       shapesMapped: `${s.mappedShapes}/${s.sourceShapes}`,
       repairs: s.repairAttempts,
+      failedItems: report.items.filter((i: any) => i.status === "failed").map((i: any) => `[${i.category}] ${i.message}`),
     } : null,
   };
 }

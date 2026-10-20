@@ -1,0 +1,77 @@
+{
+  "label": "optimized2",
+  "model": "gemini-3.8-flash",
+  "thinking": {
+    "plan": "medium",
+    "build": "low",
+    "repair": "low",
+    "repairFinal": "medium"
+  },
+  "results": [
+    {
+      "file": "sample_lead_capture_35_steps.drawio",
+      "error": null,
+      "planStages": 37,
+      "nodes": 43,
+      "seconds": {
+        "plan": 49.439,
+        "build": 19.497,
+        "total": 68.936
+      },
+      "tokens": {
+        "all": {
+          "calls": 5,
+          "prompt": 17801,
+          "thought": 4813,
+          "output": 9590,
+          "total": 32204,
+          "ms": 92961,
+          "failed": 0
+        },
+        "byStep": {
+          "plan": {
+            "calls": 1,
+            "prompt": 5215,
+            "thought": 4813,
+            "output": 2818,
+            "total": 12846,
+            "ms": 49427,
+            "failed": 0
+          },
+          "build": {
+            "calls": 3,
+            "prompt": 9292,
+            "thought": 0,
+            "output": 6131,
+            "total": 15423,
+            "ms": 38242,
+            "failed": 0
+          },
+          "repair": {
+            "calls": 1,
+            "prompt": 3294,
+            "thought": 0,
+            "output": 641,
+            "total": 3935,
+            "ms": 5292,
+            "failed": 0
+          }
+        }
+      },
+      "quality": {
+        "status": "warning",
+        "failedChecks": 0,
+        "warnings": 5,
+        "connections": "35/35",
+        "messages": "8/8",
+        "questions": "8/8",
+        "branches": "8/9",
+        "events": "0/0",
+        "sim": "20 pass / 0 fail / 0 n/t",
+        "shapesMapped": "36/36",
+        "repairs": 1,
+        "failedItems": []
+      }
+    }
+  ]
+}

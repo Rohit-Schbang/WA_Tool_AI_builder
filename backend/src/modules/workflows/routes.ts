@@ -239,6 +239,8 @@ const generateSchema = z.object({
 const aiErrorMessage = (err: any) =>
   /API Key/i.test(String(err?.message))
     ? "AI is not configured on the server (missing Gemini key)."
+    : /spending cap|spend cap/i.test(String(err?.message))
+      ? "The AI account has reached its monthly spending cap. An admin needs to raise it in Google AI Studio (ai.studio/spend)."
     : /RESOURCE_EXHAUSTED|prepayment|402/i.test(String(err?.message))
       ? "The AI account is out of credits. Please top up the Gemini billing."
       : /AI_OUTPUT_TRUNCATED/.test(String(err?.message))

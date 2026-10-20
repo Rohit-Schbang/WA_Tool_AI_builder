@@ -29,10 +29,11 @@ const envSchema = z.object({
   // "minimal" | "low" | "medium" | "high" | "default" (model decides, uncapped)
   // or a number = exact thinking-token budget. Gemini 3 models take a level,
   // Gemini 2.5 models take a budget; aiProvider converts between them.
-  AI_THINKING_PLAN: z.string().default("low"),     // classify the diagram / plan stages
+  AI_THINKING_PLAN: z.string().default("medium"),  // classify the diagram / plan stages (one call; worth reasoning)
   AI_THINKING_BUILD: z.string().default("low"),    // build batches (fill in a fixed spec)
   AI_THINKING_REPAIR: z.string().default("low"),   // targeted repairs (final attempt escalates)
-  AI_THINKING_REPAIR_FINAL: z.string().default("high"),
+  // "high" burned ~19k thinking tokens / 2 min on one repair without improving it.
+  AI_THINKING_REPAIR_FINAL: z.string().default("medium"),
   AI_THINKING_REPLY: z.string().default("low"),    // AI Reply node in live chats
   // Parallel Gemini calls when building/repairing in batches (mind rate limits).
   AI_BUILD_CONCURRENCY: z.coerce.number().int().min(1).max(8).default(4),
