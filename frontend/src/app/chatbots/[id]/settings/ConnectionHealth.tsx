@@ -12,6 +12,8 @@ interface Health {
   connected: boolean;
   status: string;
   phoneNumber: string | null;
+  phoneNumberId?: string | null;
+  systemUserId?: string | null;
   businessName: string | null;
   qualityRating: string | null;
   codeVerificationStatus: string | null;
@@ -56,12 +58,23 @@ function relativeTime(iso: string | null): string {
   return `${Math.round(secs / 86400)}d ago`;
 }
 
-export function ConnectionHealth({ chatbotId }: { chatbotId: string }) {
+export function ConnectionHealth({
+  chatbotId,
+  onHealth,
+}: {
+  chatbotId: string;
+  // Called with each fresh result so the page's status badges stay in sync.
+  onHealth?: (h: Health) => void;
+}) {
   const [health, setHealth] = useState<Health | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [notConfigured, setNotConfigured] = useState(false);
+  // Request failed (network / server) — shown instead of silently vanishing.
+  const [loadError, setLoadError] = useState("");
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const onHealthRef = useRef(onHealth);
+  onHealthRef.current = onHealth;
 
   const load = useCallback(async (manual = false) => {
     if (manual) setRefreshing(true);
@@ -69,8 +82,12 @@ export function ConnectionHealth({ chatbotId }: { chatbotId: string }) {
       const res = await api.get(`/api/chatbots/${chatbotId}/connection/health`);
       setHealth(res.data);
       setNotConfigured(false);
+      setLoadError("");
+      onHealthRef.current?.(res.data);
     } catch (err: any) {
-      if (err.response?.status === 404) setNotConfigured(true);
+      if (err.response?.status === 404) { setNotConfigured(true); setLoadError(""); }
+      // Keep the last good snapshot on screen; just note the failure.
+      else setLoadError(err.response?.data?.error ?? "Couldn't refresh number health.");
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -83,10 +100,8 @@ export function ConnectionHealth({ chatbotId }: { chatbotId: string }) {
     return () => { if (timer.current) clearInterval(timer.current); };
   }, [load]);
 
-  // Nothing connected yet — don't clutter the page.
-  if (notConfigured || (!loading && !health)) return null;
-
   const q = qualityStyle(health?.qualityRating ?? null);
+  const hasCredentials = !!health?.phoneNumberId || !!health?.connected;
 
   return (
     <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm p-5 flex flex-col gap-4">
@@ -97,8 +112,12 @@ export function ConnectionHealth({ chatbotId }: { chatbotId: string }) {
           </div>
           <div>
             <span className="text-sm font-bold text-slate-900">Number Health</span>
-            <div className="text-[11px] text-slate-400">
-              {loading ? "Checking…" : `Updated ${relativeTime(health?.checkedAt ?? null)}`}
+            <div className="text-[11px] text-slate-400" aria-live="polite">
+              {loading
+                ? "Checking with Meta…"
+                : notConfigured || !health
+                ? "Not available yet"
+                : `Updated ${relativeTime(health.checkedAt)}`}
             </div>
           </div>
         </div>
@@ -114,7 +133,20 @@ export function ConnectionHealth({ chatbotId }: { chatbotId: string }) {
       </div>
 
       {loading ? (
-        <div className="h-24 rounded-xl bg-slate-50 border border-slate-100 animate-pulse" />
+        <div className="h-24 rounded-xl bg-slate-50 border border-slate-100 animate-pulse" role="status" aria-label="Loading number health" />
+      ) : notConfigured || (!health && !loadError) || (health && !hasCredentials) ? (
+        <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-center text-xs text-slate-500">
+          <i className="ph ph-plug text-2xl text-slate-300 block mb-1" aria-hidden="true"></i>
+          Connect a WhatsApp number to see its quality rating, verification and display-name status here.
+        </div>
+      ) : !health ? (
+        <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-4 text-xs text-amber-800 flex items-center justify-between gap-2">
+          <span className="flex items-center gap-1.5">
+            <i className="ph-bold ph-warning-circle" aria-hidden="true"></i>
+            {loadError}
+          </span>
+          <button type="button" onClick={() => load(true)} className="font-semibold underline">Retry</button>
+        </div>
       ) : (
         <>
           {/* Phone + connection line */}
@@ -156,6 +188,26 @@ export function ConnectionHealth({ chatbotId }: { chatbotId: string }) {
               </span>
             </div>
           </div>
+
+          {(health.phoneNumberId || health.systemUserId) && (
+            <dl className="grid grid-cols-2 gap-2.5 text-[11px]">
+              <div className="min-w-0">
+                <dt className="text-slate-500">Phone Number ID</dt>
+                <dd className="font-mono text-slate-800 truncate">{health.phoneNumberId ?? "—"}</dd>
+              </div>
+              <div className="min-w-0">
+                <dt className="text-slate-500">System User ID</dt>
+                <dd className="font-mono text-slate-800 truncate">{health.systemUserId ?? "—"}</dd>
+              </div>
+            </dl>
+          )}
+
+          {loadError && (
+            <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5 flex items-center gap-1.5">
+              <i className="ph-bold ph-warning-circle" aria-hidden="true"></i>
+              Showing last-known status — {loadError}
+            </div>
+          )}
 
           {health?.error && (
             <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5 flex items-center gap-1.5">

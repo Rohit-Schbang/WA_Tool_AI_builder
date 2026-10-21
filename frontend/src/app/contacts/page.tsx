@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { Sidebar } from "@/app/components/Sidebar";
+import { dialog } from "@/app/components/Dialog";
 
 // Shape of a Contact returned by the backend
 interface Contact {
@@ -156,11 +157,17 @@ export default function ContactsPage() {
     // ----------------------->>> Editing a contact (quick prompt-based edit)
 
     async function handleEdit(contact: Contact) {
-        const newName = window.prompt("Name", contact.name)
-        if (!newName) return
-        const newPhone = window.prompt("Phone", contact.phone)
-        if (!newPhone) return
-        const newTags = window.prompt("Tags (comma separated)", contact.tags.join(", ")) ?? ""
+        // One form for all three fields instead of three browser prompts.
+        const res = await dialog.prompt({
+            title: "Edit contact",
+            fields: [
+                { name: "name", label: "Name", value: contact.name, required: true },
+                { name: "phone", label: "Phone", value: contact.phone, type: "tel", required: true },
+                { name: "tags", label: "Tags", value: contact.tags.join(", "), hint: "Comma separated" },
+            ],
+        })
+        if (!res) return
+        const { name: newName, phone: newPhone, tags: newTags = "" } = res
         try {
             await api.patch(`/api/contacts/${contact.id}`, {
                 name: newName,
@@ -170,14 +177,14 @@ export default function ContactsPage() {
             })
             loadContacts()
         } catch (err: any) {
-            alert(err.response?.data?.error ?? "Failed to update contact")
+            dialog.alert({ title: "Couldn't update contact", message: err.response?.data?.error ?? "Failed to update contact", tone: "danger" })
         }
     }
 
     // ----------------------->>> Deleting a contact
 
     async function handleDelete(id: string) {
-        if (!window.confirm("Delete this contact?")) return;
+        if (!(await dialog.confirm({ title: "Delete this contact?", message: "This can't be undone.", danger: true }))) return;
         await api.delete(`/api/contacts/${id}`);
         loadContacts();
     }

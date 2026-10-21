@@ -4,9 +4,7 @@ import { api } from "@/lib/api";
 import { useCallback, useEffect, useState } from "react";
 
 // User activity log for one bot (who changed what, across versions).
-// Viewing requires a special access key, checked on the SERVER
-// (x-activity-key header). The key is kept in sessionStorage only, so it's
-// forgotten when the tab closes.
+// Visible to any signed-in user.
 
 interface Entry {
   id: string;
@@ -17,8 +15,6 @@ interface Entry {
   details: any;
   createdAt: string;
 }
-
-const KEY_STORAGE = "pf-activity-key";
 
 const ACTION_LABEL: Record<string, string> = {
   "chatbot.create": "Created the bot",
@@ -45,36 +41,25 @@ function describe(e: Entry): string {
 }
 
 export function ActivityLogPanel({ chatbotId, onClose }: { chatbotId: string; onClose: () => void }) {
-  const [key, setKey] = useState<string>(() =>
-    typeof window !== "undefined" ? sessionStorage.getItem(KEY_STORAGE) ?? "" : ""
-  );
-  const [keyDraft, setKeyDraft] = useState("");
   const [entries, setEntries] = useState<Entry[] | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const load = useCallback(async (k: string) => {
+  const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const res = await api.get(`/api/activity`, {
-        params: { chatbotId, limit: 100 },
-        headers: { "x-activity-key": k },
-      });
+      const res = await api.get(`/api/activity`, { params: { chatbotId, limit: 100 } });
       setEntries(res.data?.entries ?? []);
-      sessionStorage.setItem(KEY_STORAGE, k);
-      setKey(k);
     } catch (err: any) {
-      const status = err.response?.status;
       setEntries(null);
-      if (status === 403) { sessionStorage.removeItem(KEY_STORAGE); setKey(""); }
       setError(err.response?.data?.error ?? "Couldn't load the activity log.");
     } finally {
       setLoading(false);
     }
   }, [chatbotId]);
 
-  useEffect(() => { if (key) load(key); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load(); }, [load]);
 
   return (
     <div className="fixed inset-0 z-[80] bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4" onClick={onClose}>
@@ -88,17 +73,17 @@ export function ActivityLogPanel({ chatbotId, onClose }: { chatbotId: string; on
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
           <div>
             <h3 id="activity-title" className="text-lg font-bold text-slate-900">Activity log</h3>
-            <p className="text-xs text-slate-500 mt-0.5">Who changed this bot, and when. Requires an access key.</p>
+            <p className="text-xs text-slate-500 mt-0.5">Who changed this bot, and when.</p>
           </div>
           <div className="flex items-center gap-1">
-            {key && (
-              <button
-                onClick={() => { sessionStorage.removeItem(KEY_STORAGE); setKey(""); setEntries(null); }}
-                className="text-[11px] text-slate-500 hover:text-slate-800 px-2 py-1"
-              >
-                Lock
-              </button>
-            )}
+            <button
+              onClick={load}
+              disabled={loading}
+              className="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-400 disabled:opacity-50"
+              aria-label="Refresh activity log"
+            >
+              <i className={`ph-bold ph-arrow-clockwise text-sm ${loading ? "animate-spin" : ""}`} />
+            </button>
             <button onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-400" aria-label="Close activity log">
               <i className="ph-bold ph-x text-sm" />
             </button>
@@ -106,33 +91,10 @@ export function ActivityLogPanel({ chatbotId, onClose }: { chatbotId: string; on
         </div>
 
         <div className="flex-1 overflow-y-auto p-5">
-          {!key || !entries ? (
-            <form
-              onSubmit={(e) => { e.preventDefault(); if (keyDraft.trim()) load(keyDraft.trim()); }}
-              className="flex flex-col gap-3 max-w-sm mx-auto py-6"
-            >
-              <div className="w-11 h-11 rounded-xl bg-slate-100 text-slate-500 flex items-center justify-center self-center">
-                <i className="ph-bold ph-lock-key text-xl" />
-              </div>
-              <label htmlFor="activity-key" className="text-xs font-semibold text-slate-700">Access key</label>
-              <input
-                id="activity-key"
-                type="password"
-                autoComplete="off"
-                value={keyDraft}
-                onChange={(e) => setKeyDraft(e.target.value)}
-                className="h-10 px-3 rounded-lg border border-slate-200 bg-white text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-500/30 focus:border-teal-500"
-                placeholder="Enter the activity access key"
-              />
-              {error && <p role="alert" className="text-xs text-rose-600">{error}</p>}
-              <button
-                type="submit"
-                disabled={loading || !keyDraft.trim()}
-                className="h-10 rounded-lg bg-teal-700 hover:bg-teal-800 text-white text-sm font-semibold disabled:opacity-60"
-              >
-                {loading ? "Checking…" : "View activity"}
-              </button>
-            </form>
+          {error ? (
+            <p role="alert" className="text-center text-xs text-rose-600 py-10">{error}</p>
+          ) : !entries ? (
+            <p className="text-center text-xs text-slate-500 py-10">Loading…</p>
           ) : entries.length === 0 ? (
             <p className="text-center text-xs text-slate-500 py-10">No activity recorded for this bot yet.</p>
           ) : (

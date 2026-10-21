@@ -397,6 +397,8 @@ export default function LoginPage() {
                     <span className="material-symbols-outlined absolute left-3 text-slate-400 pointer-events-none select-none text-[20px]">badge</span>
                     <input
                       id="fullname"
+                      name="name"
+                      autoComplete="name"
                       type="text"
                       placeholder="Ada Lovelace"
                       value={name}
@@ -416,6 +418,8 @@ export default function LoginPage() {
                   <span className="material-symbols-outlined absolute left-3 text-slate-400 pointer-events-none select-none text-[20px]">mail</span>
                   <input
                     id="work-email"
+                    name="email"
+                    autoComplete="username"
                     type="email"
                     placeholder={`name@${allowedDomains[0]}`}
                     value={email}
@@ -458,6 +462,8 @@ export default function LoginPage() {
                       <span className="material-symbols-outlined absolute left-3 text-slate-400 pointer-events-none select-none text-[20px]">chat</span>
                       <input
                         id="phone"
+                        name="tel-national"
+                        autoComplete="tel-national"
                         type="tel"
                         placeholder="98765 43210"
                         value={phone}
@@ -484,6 +490,8 @@ export default function LoginPage() {
                   <span className="material-symbols-outlined absolute left-3 text-slate-400 pointer-events-none select-none text-[20px]">lock</span>
                   <input
                     id="account-password"
+                    name="password"
+                    autoComplete={isRegister ? "new-password" : "current-password"}
                     type={showPassword ? "text" : "password"}
                     placeholder={isRegister ? "Min. 8 characters" : "••••••••••••"}
                     value={password}

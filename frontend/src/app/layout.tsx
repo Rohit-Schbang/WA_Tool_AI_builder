@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import Script from "next/script";
 import "./globals.css";
+import { DialogHost } from "./components/Dialog";
 
 export const metadata = {
   title: "Whatsbang",
@@ -55,6 +56,8 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       </head>
       <body className="min-h-screen bg-base-200 dark:bg-slate-950 text-slate-900 dark:text-slate-100 transition-colors" suppressHydrationWarning>
         {children}
+        {/* Styled replacement for window.alert/confirm/prompt (see components/Dialog.tsx). */}
+        <DialogHost />
       </body>
     </html>
   );

@@ -3,6 +3,7 @@
 import { api } from "@/lib/api";
 import { useEffect, useRef, useState } from "react";
 import { FidelityReport, type FidelityReportData } from "./FidelityReport";
+import { dialog } from "@/app/components/Dialog";
 
 // AI Journey Generator panel — a floating side chat on the builder canvas.
 // Two-phase, agentic: the user describes the journey (and optionally attaches a
@@ -32,12 +33,18 @@ export function AiJourneyPanel({
   hideLauncher = false,
   onOpenChange,
   onFocusNode,
+  onBuildingChange,
+  onReport,
 }: {
   chatbotId: string;
   onApply: (def: GeneratedDefinition) => void;
   hasExistingNodes: boolean;
   getCurrentDefinition: () => any;
   onFocusNode?: (id: string) => void;
+  // Called when a build starts/finishes (the canvas shows a loader meanwhile).
+  onBuildingChange?: (building: boolean) => void;
+  // Called with each verification report so the builder can keep a copy.
+  onReport?: (report: FidelityReportData) => void;
   // Hide the launcher while the test chat is open (both live bottom-right).
   hideLauncher?: boolean;
   onOpenChange?: (open: boolean) => void;
@@ -173,9 +180,11 @@ export function AiJourneyPanel({
   // STEP 2 — user APPROVED the plan → build the (regenerated) workflow & apply.
   async function buildApproved() {
     if (hasExistingNodes) {
-      const ok = window.confirm(
-        "This will replace the current flow on the canvas with the generated one. Continue?"
-      );
+      const ok = await dialog.confirm({
+        title: "Replace the current flow?",
+        message: "The flow on the canvas will be replaced with the generated one. Your published versions are not affected.",
+        confirmText: "Replace",
+      });
       if (!ok) return;
     }
     setError("");
@@ -188,7 +197,7 @@ export function AiJourneyPanel({
             anchorNodeId: anchorNodeId || undefined,
             plan,
           }
-        : { description, drawioXml: drawioXml || undefined, plan, apiConfigs: getCurrentDefinition()?.apiConfigs };
+        : { description, drawioXml: drawioXml || undefined, sourceName: drawioName ?? undefined, plan, apiConfigs: getCurrentDefinition()?.apiConfigs };
       const res = await api.post(`/api/chatbots/${chatbotId}/workflow/generate`, body);
       const { definition, warnings: warns, report: rep } = res.data;
       if (!definition) {
@@ -201,12 +210,16 @@ export function AiJourneyPanel({
       if (rep?.status === "failed") {
         const n = (rep.items ?? []).filter((i: any) => i.status === "failed").length;
         setReport(rep);
-        const ok = window.confirm(
-          `Verification found ${n} unresolved problem(s) compared with your diagram.\n\nApply the journey anyway so you can fix them on the canvas? (See the report for details.)`
-        );
+        const ok = await dialog.confirm({
+          title: `${n} unresolved problem${n === 1 ? "" : "s"} found`,
+          message: "Verification found differences from your diagram. Apply the journey anyway so you can fix them on the canvas? The report shows the details.",
+          confirmText: "Apply anyway",
+          tone: "warning",
+        });
         if (!ok) { setPhase("review"); return; }
       }
       onApply(definition); // apply the built/patched definition to the canvas
+      if (rep) onReport?.(rep); // saved server-side; refresh the Reports list
       const warnList = Array.isArray(warns) ? warns : [];
       // Reset the panel to its default "Create plan" state after a successful
       // build, but keep warnings + the verification report visible.
@@ -220,6 +233,7 @@ export function AiJourneyPanel({
   }
 
   const busy = phase === "planning" || phase === "building";
+  useEffect(() => { onBuildingChange?.(phase === "building"); }, [phase, onBuildingChange]);
 
   return (
     <>

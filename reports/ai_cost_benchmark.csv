@@ -1,0 +1,28 @@
+Sample file,Steps,Blocks built,Total time (s),Plan time (s),Build+verify time (s),AI calls,Plan calls,Build calls,Repair calls,Input tokens,Thinking tokens,Output tokens,Total tokens,Thinking share of tokens,Cost USD (current rate),Cost INR (~88/USD),Cost USD (from 1 Jan 2027),Failed checks,Connections verified,Messages verified,Questions verified,Branches verified,Simulated tests
+Lead capture,35,40,107,40,67,5,1,3,1,17844,16935,9155,43934,39%,0.111,9.8,0.222,0,35/35,8/8,8/8,8/12,20 pass / 0 fail
+Customer support,45,51,212,104,108,6,1,4,1,22248,34298,11713,68259,50%,0.189,16.6,0.378,0,45/45,10/10,10/10,10/15,21 pass / 0 fail / 2 not tested
+Appointment booking,60,69,203,81,122,8,1,6,1,31761,31951,15859,79571,40%,0.203,17.9,0.406,0,60/60,14/14,14/14,13/19,35 pass / 0 fail
+E-commerce assistant,72,81,297,60,237,10,1,7,2,43057,52093,20095,115245,45%,0.303,26.7,0.606,0,72/72,16/16,16/16,16/24,40 pass / 0 fail
+Customer survey,85,95,408,81,327,10,1,8,1,45427,77549,22388,145364,53%,0.409,36.0,0.818,0,85/85,20/20,20/20,18/27,46 pass / 0 fail
+TOTAL (5 files),297,336,1227,366,861,39,5,28,6,160337,212826,79210,452373,47%,1.215,106.9,2.430,0,,,,,
+AVERAGE per file,59,67,245,73,172,8,1,6,1,32067,42565,15842,90475,47%,0.243,21.4,0.486,0,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,
+OPTIMISED RUNS (35-step lead capture),,,,,,,,,,,,,,,,,,,,,,,
+Lead capture - try 1 (plan low / repair final high),35,40,168,18,150,6,1,3,2,19680,19397,9465,48542,40%,0.123,10.8,0.246,2,34/34,8/8,8/8,8/9,20 pass / 0 fail
+Lead capture - FINAL (plan medium / build low / repair low / final medium),35,40,69,49,20,5,1,3,1,17801,4813,9590,32204,15%,0.067,5.9,0.135,0,35/35,8/8,8/8,8/9,20 pass / 0 fail
+Change vs baseline (final settings),,,-36%,,,0,,,,0%,-72%,+5%,-27%,,-39%,-39%,,same (0),,,,,
+,,,,,,,,,,,,,,,,,,,,,,,
+Cost by step (all 5 files),,,,,,,,,,,,,,,,,,,,,,,
+Step,Calls,Input tokens,Thinking tokens,Output tokens,Cost USD,Share of cost,,,,,,,,,,,,,,,,,
+Plan,5,36418,32704,23340,0.238,20%,,,,,,,,,,,,,,,,,
+Build batches,28,96197,125881,44323,0.710,58%,,,,,,,,,,,,,,,,,
+Repairs,6,27722,54241,11547,0.268,22%,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,
+Notes,,,,,,,,,,,,,,,,,,,,,,,
+"Run: baseline = pipeline BEFORE the optimisation (uncapped thinking, up to 3 repairs). Model gemini-3.8-flash.",,,,,,,,,,,,,,,,,,,,,,,
+"Pricing used: $0.75 per 1M input tokens, $3.75 per 1M output tokens; thinking tokens are billed as output. Rate doubles from 1 Jan 2027. Source: apidog.com/blog/gemini-3-8-flash-pricing (third-party, verify on ai.google.dev/gemini-api/docs/pricing).",,,,,,,,,,,,,,,,,,,,,,,
+"INR at an assumed ~88 per USD.",,,,,,,,,,,,,,,,,,,,,,,
+"Thinking = 47% of tokens but ~66% of cost (it is billed at the output rate).",,,,,,,,,,,,,,,,,,,,,,,
+"Optimised try 1: all-low thinking was fast but the plan was weaker; the final high-thinking repair used 19k thinking tokens / 133s and fixed nothing (2 checks failed).",,,,,,,,,,,,,,,,,,,,,,,
+"Final defaults: plan=medium, build=low, repair=low, final repair=medium, max 2 repairs. Result: 0 failed checks, 39% cheaper, 36% faster, 72% less thinking on the 35-step file.",,,,,,,,,,,,,,,,,,,,,,,
+"Projected for the other files at the same ratio (not measured): 60 steps ~$0.12 (~Rs 11), 85 steps ~$0.25 (~Rs 22).",,,,,,,,,,,,,,,,,,,,,,,

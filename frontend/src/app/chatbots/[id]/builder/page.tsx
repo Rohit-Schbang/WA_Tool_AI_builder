@@ -26,6 +26,9 @@ import { layoutGraph } from "./autoLayout";
 import { ensureSingleStart } from "./startNode";
 import { EditableBotName } from "@/app/components/EditableBotName";
 import { ActivityLogPanel } from "./ActivityLogPanel";
+import { ReportsPanel } from "./ReportsPanel";
+import { nextSerial, renumberByType } from "./nodeSerials";
+import { dialog } from "@/app/components/Dialog";
 import { useAutoSave, readLocalDraft, clearLocalDraft } from "./useAutoSave";
 import { AiJourneyPanel } from "./AiJourneyPanel";
 
@@ -47,6 +50,7 @@ const NODE_TYPES = [
   "TRANSFORM",
   "API_REQUEST",
   "WAIT",
+  "END",
 ] as const;
 
 type WorkflowNodeType = (typeof NODE_TYPES)[number];
@@ -109,6 +113,41 @@ interface ApiConfig {
   endpoints?: ApiEndpoint[];
 }
 
+// Resolve an API_REQUEST node's call (method, full URL, body template) from its
+// selected global config + endpoint. null = no config chosen yet; `missing`
+// explains what's still to pick. Used by the config panel and the node card.
+export interface ApiCallPreview { method: string; url: string; body: string; missing?: string }
+function resolveApiCall(configs: ApiConfig[], nodeConfig: any): ApiCallPreview | null {
+  const cfg = configs.find((c) => c.name === nodeConfig?.apiConfig);
+  if (!cfg) return null;
+  const eps = cfg.endpoints ?? [];
+  const ep = eps.find((e) => e.id === nodeConfig?.endpointId);
+  if (eps.length > 0 && !ep) return { method: "", url: "", body: "", missing: "Endpoint not selected" };
+  const base = (cfg.baseUrl || "").replace(/\/$/, "");
+  const path = ep?.path ?? "";
+  const url = /^https?:\/\//i.test(path) ? path : path ? `${base}/${path.replace(/^\//, "")}` : base;
+  return { method: (ep?.method || "GET").toUpperCase(), url, body: (ep?.body ?? "").trim() };
+}
+
+// Pretty-print a JSON body template for display; {{vars}} (even unquoted) are
+// kept as-is. Falls back to the raw text if it isn't valid JSON.
+function prettyJson(body: string): string {
+  const tokens: string[] = [];
+  let masked = body.replace(/\{\{\s*\w+\s*\}\}/g, (m) => `__V${tokens.push(m) - 1}__`);
+  // Bare (unquoted) placeholders, e.g. "age": {{age}} — quote them so the
+  // JSON parses, and remember to un-quote them after formatting.
+  const bare = new Set<string>();
+  // Bare = a whole JSON value (after : , [ and before , } ]), not text inside a string.
+  masked = masked.replace(/([:[,]\s*)(__V\d+__)(?=\s*[,}\]])/g, (_m, pre, ph) => { bare.add(ph); return `${pre}"${ph}"`; });
+  try {
+    let out = JSON.stringify(JSON.parse(masked), null, 2);
+    out = out.replace(/"(__V\d+__)"/g, (m, ph) => (bare.has(ph) ? ph : m));
+    return out.replace(/__V(\d+)__/g, (_m, i) => tokens[Number(i)]);
+  } catch {
+    return body;
+  }
+}
+
 // Human-friendly default names per type (#3).
 const TYPE_LABEL: Record<string, string> = {
   START: "Start",
@@ -122,6 +161,7 @@ const TYPE_LABEL: Record<string, string> = {
   TRANSFORM: "Custom Code",
   API_REQUEST: "API Request",
   WAIT: "Delay",
+  END: "End",
 };
 
 // #13 — maximum delay a WAIT node may specify (in seconds). 24h.
@@ -153,6 +193,7 @@ const PALETTE_GROUPS: {
     items: [
       { type: "CONDITION", icon: "ph-git-fork", accent: "bg-amber-100 text-amber-700" },
       { type: "WAIT", icon: "ph-clock-countdown", accent: "bg-amber-100 text-amber-700" },
+      { type: "END", icon: "ph-stop-circle", accent: "bg-slate-200 text-slate-700" },
     ],
   },
   {
@@ -275,7 +316,12 @@ function BuilderInner() {
   const [botName, setBotName] = useState("");
   const [activating, setActivating] = useState(false);
   const [publishErrors, setPublishErrors] = useState<{ message: string; nodeId?: string }[]>([]);
-  const [seqCounter, setSeqCounter] = useState(1);
+  // True until the draft has been fetched and drawn on the canvas.
+  const [loadingBot, setLoadingBot] = useState(true);
+  const [showReports, setShowReports] = useState(false);
+  const [reportCount, setReportCount] = useState(0);
+  // An AI build is running (the canvas shows a loader until it's applied).
+  const [aiBuilding, setAiBuilding] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savedMsg, setSavedMsg] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -357,7 +403,7 @@ function BuilderInner() {
       // Nothing may connect INTO the START node — an edge targeting START
       // creates a loop (e.g. Question -> START re-runs the flow). Block it.
       if (connection.target === "start") {
-        window.alert("You can't connect a node back into the Start node.");
+        dialog.alert({ title: "Can't connect to Start", message: "Nothing can connect back into the Start node — it would restart the flow in a loop.", tone: "warning" });
         return;
       }
       // A node shouldn't connect to itself.
@@ -418,7 +464,8 @@ function BuilderInner() {
     setNodes((nds) => {
       const target = nds.find((n) => n.id === id);
       if (target?.data.nodeType === "START") {
-        window.alert("The START node cannot be deleted.");
+        // Deferred: this runs inside a state updater, which must stay pure.
+        setTimeout(() => dialog.alert({ title: "Start can't be deleted", message: "Every flow needs its Start node.", tone: "warning" }), 0);
         return nds;
       }
       return nds.filter((n) => n.id !== id);
@@ -428,7 +475,8 @@ function BuilderInner() {
   }, [setNodes, setEdges]);
 
   function addNode(nodeType: WorkflowNodeType) {
-    const seq = seqCounter;
+    // Per-type numbering: Send Message 1, Send Message 2, API Request 1…
+    const seq = nextSerial(nodes, nodeType);
     const id = makeId();
     // Place the new node just BELOW the current bottom-most node (aligned to
     // its x), so nodes stack predictably and don't overlap. Not connected.
@@ -456,7 +504,6 @@ function BuilderInner() {
       },
     };
     setNodes((nds) => [...nds, newNode]);
-    setSeqCounter((count) => count + 1);
     // (Publish visibility is handled centrally by the change-tracking effect.)
     // auto-select + focus after the node is in the tree
     setTimeout(() => focusNode(id), 50);
@@ -493,7 +540,9 @@ function BuilderInner() {
     // Every load path (server draft, local restore, version restore, AI
     // generation) goes through here, so this is where we guarantee the canvas
     // always has exactly one START node.
-    const def = ensureSingleStart(rawDef ?? { nodes: [], edges: [] });
+    const single = ensureSingleStart(rawDef ?? { nodes: [], edges: [] });
+    // Number nodes 1..n within each type (older flows used one shared counter).
+    const def = { ...single, nodes: renumberByType(single.nodes ?? [], TYPE_LABEL) };
     const loadedNodes: Node[] = (def.nodes ?? []).map((node: any, i: number) => ({
       id: node.id,
       type: "workflow",
@@ -519,8 +568,6 @@ function BuilderInner() {
     setEdges(loadedEdges);
     if (Array.isArray(def.variables)) setVariables(def.variables);
     if (Array.isArray(def.apiConfigs)) setApiConfigs(def.apiConfigs);
-    const maxSeq = (def.nodes ?? []).reduce((m: number, n: any) => Math.max(m, n.seq ?? 0), 0);
-    setSeqCounter(maxSeq + 1);
   }, [deleteNode, setNodes, setEdges]);
 
   // ---------------------- AI JOURNEY GENERATOR ----------------------
@@ -1133,10 +1180,12 @@ function BuilderInner() {
           onDelete: deleteNode,
           optionTargets,
           searchHighlight: n.id === searchHighlightId,
+          // API Request card shows the resolved method + URL + body.
+          ...(n.data.nodeType === "API_REQUEST" ? { apiPreview: resolveApiCall(apiConfigs, n.data.config) } : {}),
         },
       };
     });
-  }, [nodes, edges, searchHighlightId, nodeName, deleteNode]);
+  }, [nodes, edges, searchHighlightId, nodeName, deleteNode, apiConfigs]);
 
   // Decorate edges with a label = the source option's text (button/list row),
   // so a viewer can tell which button/branch an edge originates from (#15).
@@ -1243,6 +1292,9 @@ function BuilderInner() {
       api.get(`/api/chatbots/${chatbotId}`)
         .then((res) => { setIsActive(res.data.isActive); setBotName(res.data.name ?? ""); })
         .catch(() => { });
+      api.get(`/api/chatbots/${chatbotId}/workflow/reports`)
+        .then((res) => setReportCount(res.data?.reports?.length ?? 0))
+        .catch(() => { });
 
       // #11 — recover a local draft only if it MEANINGFULLY differs from the
       // server copy (protects against an accidental refresh/close before the
@@ -1257,6 +1309,7 @@ function BuilderInner() {
         setRestorePrompt({ localDef: local.definition, serverDef, savedAt: local.savedAt });
         // Load the server copy underneath so the canvas isn't blank while asking.
         if (serverDef) hydrateDefinition(serverDef);
+        finishLoading();
         return; // autoReady is set once the user chooses in the modal
       }
 
@@ -1269,6 +1322,15 @@ function BuilderInner() {
         autoSave.primeBaseline(serverDef);
       }
       setAutoReady(true);
+      finishLoading();
+    }
+    // Keep the loader up until the nodes are drawn and the view is fitted, so
+    // the user never sees a half-rendered canvas.
+    function finishLoading() {
+      setTimeout(() => {
+        rfRef.current?.fitView({ padding: 0.2 });
+        setLoadingBot(false);
+      }, 150);
     }
     loadDraft();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1559,6 +1621,14 @@ function BuilderInner() {
               <i className="ph ph-clock-counter-clockwise text-brand-600 text-sm" />
               <span>Versions ({versionsInfo?.versions.length ?? 0})</span>
             </button>
+            <button
+              onClick={() => setShowReports(true)}
+              className="px-2.5 py-1 rounded-lg font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-transparent hover:border-slate-200 transition flex items-center space-x-1.5 text-xs"
+              title="Saved AI build reports"
+            >
+              <i className="ph ph-seal-check text-brand-600 text-sm" />
+              <span>Reports ({reportCount})</span>
+            </button>
           </div>
         </div>
         <div className="flex items-center space-x-3">
@@ -1686,7 +1756,20 @@ function BuilderInner() {
             </div>
           </div>
         )}
-        <div className="flex-1 min-h-0 h-full">
+        <div className="flex-1 min-h-0 h-full relative">
+          {(loadingBot || aiBuilding) && (
+            <div
+              className={`absolute inset-0 z-30 flex flex-col items-center justify-center gap-3 ${loadingBot ? "bg-slate-50/95" : "bg-slate-50/75 backdrop-blur-[1px]"}`}
+              role="status"
+              aria-live="polite"
+            >
+              <span className="w-10 h-10 rounded-full border-4 border-brand-200 border-t-brand-600 animate-spin" aria-hidden="true" />
+              <span className="text-sm font-semibold text-slate-700">{loadingBot ? "Loading your bot…" : "Building your journey…"}</span>
+              <span className="text-xs text-slate-500">
+                {loadingBot ? "Fetching the flow and drawing it on the canvas" : "The canvas updates as soon as the build is verified"}
+              </span>
+            </div>
+          )}
           <ReactFlow
             nodes={previewGraph ? previewGraph.nodes : nodesForFlow}
             edges={previewGraph ? previewGraph.edges : edgesForFlow}
@@ -2457,6 +2540,23 @@ function BuilderInner() {
               </>
             )}
 
+            {selectedNode.data.nodeType === "END" && (
+              <label className="form-control">
+                <span className="label-text">Closing message (optional)</span>
+                <textarea
+                  className="textarea textarea-bordered"
+                  rows={3}
+                  placeholder="e.g. Thanks for chatting with us! Send Hi any time to start again."
+                  value={selectedNode.data.config.text ?? ""}
+                  onChange={(e) => updateConfig("text", e.target.value)}
+                />
+                <span className="text-xs text-base-content/50 mt-1">
+                  The journey ends here. Connect any button, list option or step to this block to finish the chat.
+                  The user can restart with the trigger keyword.
+                </span>
+              </label>
+            )}
+
             {selectedNode.data.nodeType === "WAIT" && (
               <label className="form-control">
                 <span className="label-text">Seconds to wait (max {MAX_DELAY_SECONDS})</span>
@@ -2868,16 +2968,25 @@ function BuilderInner() {
 
                     {/* Read-only preview of the resolved call (method + URL). */}
                     {(() => {
-                      const cfg = apiConfigs.find((c) => c.name === selectedNode.data.config.apiConfig);
-                      if (!cfg) return null;
-                      const ep = (cfg.endpoints ?? []).find((e) => e.id === selectedNode.data.config.endpointId);
-                      const base = (cfg.baseUrl || "").replace(/\/$/, "");
-                      const path = ep?.path ?? "";
-                      const url = /^https?:\/\//i.test(path) ? path : `${base}/${path.replace(/^\//, "")}`;
+                      const call = resolveApiCall(apiConfigs, selectedNode.data.config);
+                      if (!call || call.missing) return null;
+                      const hasBody = !["GET", "DELETE"].includes(call.method);
                       return (
-                        <div className="rounded-lg border border-slate-200 bg-slate-50 p-2.5 text-[11px] font-mono text-slate-600 break-all">
-                          <span className="font-semibold text-teal-700">{(ep?.method || "GET").toUpperCase()}</span>{" "}
-                          {url || "—"}
+                        <div className="rounded-lg border border-slate-200 bg-slate-50 p-2.5 text-[11px] font-mono text-slate-600 break-all flex flex-col gap-2">
+                          <div>
+                            <span className="font-semibold text-teal-700">{call.method}</span>{" "}
+                            {call.url || "—"}
+                          </div>
+                          {hasBody && (
+                            <div className="border-t border-slate-200 pt-2">
+                              <div className="font-sans text-[10px] uppercase tracking-wide text-slate-400 mb-1">Request body</div>
+                              {call.body ? (
+                                <pre className="whitespace-pre-wrap max-h-48 overflow-y-auto text-slate-700">{prettyJson(call.body)}</pre>
+                              ) : (
+                                <span className="font-sans italic text-slate-400">No body — set it in Manage configs → endpoint.</span>
+                              )}
+                            </div>
+                          )}
                         </div>
                       );
                     })()}
@@ -3091,7 +3200,18 @@ function BuilderInner() {
         hideLauncher={testPanelOpen}
         onOpenChange={setAiPanelOpen}
         onFocusNode={focusNode}
+        onBuildingChange={setAiBuilding}
+        onReport={() => setReportCount((n) => n + 1)}
       />
+
+      {showReports && (
+        <ReportsPanel
+          chatbotId={chatbotId}
+          onClose={() => setShowReports(false)}
+          onFocusNode={focusNode}
+          onCountChange={setReportCount}
+        />
+      )}
 
       {showActivity && <ActivityLogPanel chatbotId={chatbotId} onClose={() => setShowActivity(false)} />}
 
@@ -3122,7 +3242,7 @@ function BuilderInner() {
                 <button
                   onClick={() => setShowActivity(true)}
                   className="px-2.5 h-8 rounded-lg border border-slate-200 text-xs font-semibold text-slate-600 hover:text-teal-700 hover:border-teal-300 flex items-center gap-1.5 transition"
-                  title="User activity log (requires access key)"
+                  title="User activity log"
                 >
                   <i className="ph-bold ph-list-magnifying-glass text-sm" /> Activity
                 </button>

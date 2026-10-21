@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { Sidebar } from "@/app/components/Sidebar";
 import { EditableBotName } from "@/app/components/EditableBotName";
+import { dialog } from "@/app/components/Dialog";
 
 
 
@@ -76,7 +77,11 @@ export default function ChatbotsPage() {
 
     async function handleRename(id: string, current: string) {
 
-        const name = window.prompt("New name", current)
+        const res = await dialog.prompt({
+            title: "Rename chatbot",
+            fields: [{ name: "name", label: "Chatbot name", value: current, required: true }],
+        })
+        const name = res?.name
         if (!name) return
         await api.patch(`/api/chatbots/${id}`, { name })
         loadBots()
@@ -93,7 +98,12 @@ export default function ChatbotsPage() {
     //  ---------------------->>> Deletetion of BOT
 
     async function handleDelete(id: string) {
-        if (!window.confirm("Delete this chatbot?")) return;
+        const ok = await dialog.confirm({
+            title: "Delete this chatbot?",
+            message: "Its flow, versions and conversations will be removed. This can't be undone.",
+            danger: true,
+        });
+        if (!ok) return;
         await api.delete(`/api/chatbots/${id}`);
         loadBots();
     }

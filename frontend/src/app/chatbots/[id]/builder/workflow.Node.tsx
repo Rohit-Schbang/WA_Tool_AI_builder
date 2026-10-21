@@ -77,8 +77,12 @@ export function WorkFlowNode({ id, data, selected }: NodeProps) {
     else if (nodeType === "BUTTONS") preview = config.text || "(no prompt)";
     else if (nodeType === "LIST") preview = config.text || "(no prompt)";
     else if (nodeType === "AI_RESPONSE") preview = config.prompt || "(no prompt)";
-    else if (nodeType === "API_REQUEST") preview = config.url ? `${config.method ?? "GET"} ${config.url}` : "(no URL)";
     else if (nodeType === "TRANSFORM") preview = config.variable ? `→ ${config.variable}` : "(no output var)";
+    else if (nodeType === "END") preview = config.text || "Journey ends here";
+
+    // API_REQUEST renders its own preview block below (method, URL, body),
+    // resolved from the selected global API config by the builder page.
+    const api: { method: string; url: string; body: string; missing?: string } | null | undefined = data.apiPreview;
 
     const isCondition = nodeType === "CONDITION";
     const isApi = nodeType === "API_REQUEST";
@@ -139,7 +143,10 @@ export function WorkFlowNode({ id, data, selected }: NodeProps) {
                 <span className="text-sm leading-none">{style.icon}</span>
                 <div className="flex-1 min-w-0">
                     <div className="font-semibold text-sm leading-tight truncate">{title}</div>
-                    <div className="text-[9px] uppercase tracking-wider opacity-80">{TITLE[nodeType] ?? nodeType}</div>
+                    {/* Per-type serial (e.g. "Message 2") so every block has a unique number of its kind. */}
+                    <div className="text-[9px] uppercase tracking-wider opacity-80">
+                        {TITLE[nodeType] ?? nodeType}{!isStart && seq ? ` ${seq}` : ""}
+                    </div>
                 </div>
                 {hasFallback && <span title="No-reply fallback set" className="text-[10px]">⏳</span>}
             </div>
@@ -147,6 +154,19 @@ export function WorkFlowNode({ id, data, selected }: NodeProps) {
             {/* Body */}
             <div className="px-3 py-2">
                 {preview && <div className="text-xs text-gray-600 line-clamp-2">{preview}</div>}
+
+                {nodeType === "API_REQUEST" && (
+                    !api || api.missing ? (
+                        <div className="flex items-center gap-1.5 text-xs text-amber-700">
+                            <span className="w-1.5 h-1.5 rounded-full bg-amber-500" aria-hidden="true" />
+                            {api?.missing ?? "Not configured"}
+                        </div>
+                    ) : (
+                        <div className="text-xs text-gray-700 truncate font-mono min-w-0" title={`${api.method} ${api.url}`}>
+                            <span className="font-semibold text-blue-700">{api.method}</span> {api.url || "—"}
+                        </div>
+                    )
+                )}
 
                 {/* Choice options */}
                 {isChoice && (
@@ -187,7 +207,8 @@ export function WorkFlowNode({ id, data, selected }: NodeProps) {
             )}
 
             {/* Single output for plain nodes */}
-            {!isChoice && !isCondition && !isApi && (
+            {/* END has no output: it's where the journey stops. */}
+            {!isChoice && !isCondition && !isApi && nodeType !== "END" && (
                 <Handle type="source" position={Position.Bottom} className={handleClass} />
             )}
         </div>
