@@ -8,6 +8,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Sidebar } from "@/app/components/Sidebar";
 import { EditableBotName } from "@/app/components/EditableBotName";
 import { dialog } from "@/app/components/Dialog";
+import { downloadJson, journeyFileName } from "@/lib/exportJourney";
 
 
 
@@ -35,6 +36,9 @@ export default function ChatbotsPage() {
     // UI-only state for the new dashboard search + status filter (does not affect data/logic)
     const [search, setSearch] = useState("")
     const [filter, setFilter] = useState<"all" | "active" | "inactive">("all")
+
+    // Id of the bot currently being exported (shows a spinner on its button).
+    const [exportingId, setExportingId] = useState<string | null>(null)
 
     // ------------------->>> Getting all BOTS
 
@@ -106,6 +110,27 @@ export default function ChatbotsPage() {
         if (!ok) return;
         await api.delete(`/api/chatbots/${id}`);
         loadBots();
+    }
+
+    //  ---------------------->>> Export the bot's saved journey (draft) as JSON
+    async function handleExport(id: string, name: string) {
+        if (exportingId) return
+        setExportingId(id)
+        setError("")
+        try {
+            const res = await api.get(`/api/chatbots/${id}/workflow/draft`)
+            // The draft row carries the journey under `.definition`.
+            const definition = res.data?.definition ?? res.data
+            downloadJson(definition, journeyFileName(name))
+        } catch (err: any) {
+            setError(
+                err?.response?.status === 404
+                    ? "This chatbot has no saved journey to export yet."
+                    : "Failed to export the journey."
+            )
+        } finally {
+            setExportingId(null)
+        }
     }
 
     //  ---------------------->>> Logout Re-reouter
@@ -371,6 +396,17 @@ export default function ChatbotsPage() {
                                                 </Link>
                                             </div>
                                             <div className="flex items-center gap-1">
+                                                <button
+                                                    onClick={() => handleExport(bot.id, bot.name)}
+                                                    disabled={exportingId === bot.id}
+                                                    className="inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-surface-container-high hover:bg-surface-container text-on-surface font-label-md text-label-md font-medium transition-all disabled:opacity-60"
+                                                    title="Export this journey as JSON"
+                                                >
+                                                    <span className="material-symbols-outlined text-[16px]">
+                                                        {exportingId === bot.id ? "progress_activity" : "download"}
+                                                    </span>
+                                                    <span>{exportingId === bot.id ? "Exporting..." : "Export JSON"}</span>
+                                                </button>
                                                 <button
                                                     onClick={() => handleDelete(bot.id)}
                                                     className="p-2 rounded-lg text-error hover:bg-error-container/30 transition-all"

@@ -21,7 +21,7 @@ import "reactflow/dist/style.css";
 import { WorkFlowNode } from "./workflow.Node";
 import { DeletableEdge } from "./DeletableEdge";
 import { TestPanel } from "./testPanel";
-import { VariableTextInput, VariableSelect, NoReplyFallback } from "./VariableInputs";
+import { VariableTextInput, VariableSelect, NoReplyFallback, ChoiceBehaviour } from "./VariableInputs";
 import { layoutGraph } from "./autoLayout";
 import { ensureSingleStart } from "./startNode";
 import { EditableBotName } from "@/app/components/EditableBotName";
@@ -31,6 +31,8 @@ import { nextSerial, renumberByType } from "./nodeSerials";
 import { dialog } from "@/app/components/Dialog";
 import { useAutoSave, readLocalDraft, clearLocalDraft } from "./useAutoSave";
 import { AiJourneyPanel } from "./AiJourneyPanel";
+import { WA_LIMITS } from "@/lib/waLimits";
+import { downloadJson, journeyFileName } from "@/lib/exportJourney";
 
 // Map React Flow node type name -> our custom component.
 const nodeTypes = { workflow: WorkFlowNode };
@@ -166,6 +168,20 @@ const TYPE_LABEL: Record<string, string> = {
 
 // #13 — maximum delay a WAIT node may specify (in seconds). 24h.
 const MAX_DELAY_SECONDS = 86400;
+
+// A small "123 / N" character counter for plain inputs that don't use
+// VariableTextInput (which has its own built-in counter). Amber within 10% of
+// the cap, red at/over it.
+function CharCount({ value, max }: { value: string | undefined; max: number }) {
+  const n = (value ?? "").length;
+  const cls =
+    n >= max ? "text-rose-600 font-semibold" : n >= max * 0.9 ? "text-amber-600" : "text-slate-400";
+  return (
+    <span className={`text-[11px] font-mono tabular-nums ${cls}`} title={`${n} of ${max} characters`}>
+      {n} / {max}
+    </span>
+  );
+}
 
 // Palette grouping for the node library sidebar. Every entry still calls
 // addNode(type); this only organises the existing NODE_TYPES into sections
@@ -659,6 +675,14 @@ function BuilderInner() {
     } finally {
       setPublishing(false);
     }
+  }
+
+  // ---------------------- EXPORT ----------------------
+  // Download the current canvas (nodes, edges, variables, API configs) as a
+  // JSON file — the exact shape persisted as the draft / published version.
+  function handleExportJson() {
+    const definition = buildDefinition();
+    downloadJson(definition, journeyFileName(botName || "journey"));
   }
 
   // ---------------------- ACTIVATE ----------------------
@@ -1629,6 +1653,14 @@ function BuilderInner() {
               <i className="ph ph-seal-check text-brand-600 text-sm" />
               <span>Reports ({reportCount})</span>
             </button>
+            <button
+              onClick={handleExportJson}
+              className="px-2.5 py-1 rounded-lg font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-transparent hover:border-slate-200 transition flex items-center space-x-1.5 text-xs"
+              title="Export this journey as a JSON file"
+            >
+              <i className="ph ph-download-simple text-brand-600 text-sm" />
+              <span>Export JSON</span>
+            </button>
           </div>
         </div>
         <div className="flex items-center space-x-3">
@@ -1946,13 +1978,19 @@ function BuilderInner() {
 
                 {selectedNode.data.config.header?.type && (
                   <div className="space-y-1.5">
-                    <label className="block font-semibold text-slate-700">
-                      {selectedNode.data.config.header.type === "text" ? "Header text" : "Media URL"}
-                    </label>
+                    <div className="flex items-center justify-between">
+                      <label className="block font-semibold text-slate-700">
+                        {selectedNode.data.config.header.type === "text" ? "Header text" : "Media URL"}
+                      </label>
+                      {selectedNode.data.config.header.type === "text" && (
+                        <CharCount value={selectedNode.data.config.header?.value} max={WA_LIMITS.header} />
+                      )}
+                    </div>
                     <input
                       className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 bg-white text-slate-800 font-medium focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500 transition-colors placeholder:text-slate-400"
                       placeholder={selectedNode.data.config.header.type === "text" ? "Header" : "https://..."}
                       value={selectedNode.data.config.header?.value ?? ""}
+                      maxLength={selectedNode.data.config.header.type === "text" ? WA_LIMITS.header : undefined}
                       onChange={(e) => updateNestedConfig("header", "value", e.target.value)}
                     />
                   </div>
@@ -1996,23 +2034,33 @@ function BuilderInner() {
                     </div>
                   )}
 
-                {/* #12 — Body */}
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <label className="block font-semibold text-slate-700">Message text (body)</label>
-                    <span className="text-[11px] text-slate-400 font-mono">
-                      {(selectedNode.data.config.text ?? "").length} / 1024
-                    </span>
-                  </div>
-                  <VariableTextInput
-                    value={selectedNode.data.config.text ?? ""}
-                    onChange={(v) => updateConfig("text", v)}
-                    variables={variables}
-                    onCreateVariable={ensureVariable}
-                    placeholder="Type your WhatsApp message…"
-                    rows={4}
-                  />
-                </div>
+                {/* #12 — Body. WhatsApp caps the body at 1024 when the message
+                    carries reply (CTA) buttons, otherwise 4096. */}
+                {(() => {
+                  const hasCta = (selectedNode.data.config.buttons ?? []).some(
+                    (b: any) => (b.kind ?? "cta") === "cta"
+                  );
+                  const bodyMax = hasCta ? WA_LIMITS.buttonBody : WA_LIMITS.text;
+                  return (
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="block font-semibold text-slate-700">Message text (body)</label>
+                        {hasCta && (
+                          <span className="text-[10px] text-slate-400">Limit is lower with buttons</span>
+                        )}
+                      </div>
+                      <VariableTextInput
+                        value={selectedNode.data.config.text ?? ""}
+                        onChange={(v) => updateConfig("text", v)}
+                        variables={variables}
+                        onCreateVariable={ensureVariable}
+                        placeholder="Type your WhatsApp message…"
+                        rows={4}
+                        maxLength={bodyMax}
+                      />
+                    </div>
+                  );
+                })()}
 
                 {/* #12 — Footer */}
                 <div className="space-y-1.5">
@@ -2029,6 +2077,7 @@ function BuilderInner() {
                     onCreateVariable={ensureVariable}
                     singleLine
                     placeholder="e.g. Reply STOP to opt out"
+                    maxLength={WA_LIMITS.footer}
                   />
                 </div>
 
@@ -2090,9 +2139,13 @@ function BuilderInner() {
                             style={{ fontSize: "12px", lineHeight: "16px" }}
                             placeholder="Button label..."
                             value={b.label}
+                            maxLength={WA_LIMITS.buttonLabel}
                             onChange={(e) => updateOption(b.id, e.target.value)}
                           />
                         </div>
+                        <span className="mr-1 self-center">
+                          <CharCount value={b.label} max={WA_LIMITS.buttonLabel} />
+                        </span>
                         <button
                           onClick={() => removeOption(b.id)}
                           className="w-6 h-6 rounded hover:bg-rose-50 text-slate-400 hover:text-rose-600 flex items-center justify-center transition-colors"
@@ -2181,6 +2234,29 @@ function BuilderInner() {
                     doesn't allow mixing reply buttons and URL buttons in one message.
                   </span>
                 </div>
+
+                {/* Only when the message has CTA (branching) buttons: save the
+                    choice, handle wrong replies, and lock on backtrack. */}
+                {(selectedNode.data.config.buttons ?? []).some((b: any) => (b.kind ?? "cta") === "cta") && (
+                  <>
+                    <ChoiceBehaviour
+                      node={selectedNode}
+                      otherNodes={otherNodes}
+                      nodeName={nodeName}
+                      updateConfig={updateConfig}
+                      variables={variables}
+                      onCreateVariable={ensureVariable}
+                    />
+                    <NoReplyFallback
+                      node={selectedNode}
+                      otherNodes={otherNodes}
+                      nodeName={nodeName}
+                      updateConfig={updateConfig}
+                      variables={variables}
+                      onCreateVariable={ensureVariable}
+                    />
+                  </>
+                )}
               </>
             )}
 
@@ -2194,6 +2270,7 @@ function BuilderInner() {
                     variables={variables}
                     onCreateVariable={ensureVariable}
                     placeholder="Ask something…"
+                    maxLength={WA_LIMITS.question}
                   />
                 </div>
                 <div className="space-y-1.5">
@@ -2210,6 +2287,7 @@ function BuilderInner() {
                     onCreateVariable={ensureVariable}
                     singleLine
                     placeholder="Footer text…"
+                    maxLength={WA_LIMITS.footer}
                   />
                 </div>
 
@@ -2323,6 +2401,7 @@ function BuilderInner() {
                           variables={variables}
                           onCreateVariable={ensureVariable}
                           placeholder="That doesn't look valid. Please try again."
+                          maxLength={WA_LIMITS.failureMessage}
                         />
                       </div>
                     </>
@@ -2360,6 +2439,7 @@ function BuilderInner() {
                           variables={variables}
                           onCreateVariable={ensureVariable}
                           placeholder="Please send the requested attachment."
+                          maxLength={WA_LIMITS.failureMessage}
                         />
                       </div>
                     </>
@@ -2374,6 +2454,20 @@ function BuilderInner() {
                   variables={variables}
                   onCreateVariable={ensureVariable}
                 />
+
+                {/* Backtrack lock — ignore a re-answer if the flow returns here. */}
+                <label className="flex items-start gap-2 cursor-pointer border-t border-slate-200 pt-3">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={!!selectedNode.data.config.lockAfterAnswer}
+                    onChange={(e) => updateConfig("lockAfterAnswer", e.target.checked)}
+                  />
+                  <span>
+                    <span className="font-semibold text-slate-700">Lock after answering</span>
+                    <span className="block text-[11px] text-slate-400">If the user returns to this question, don&apos;t ask again — remind them they already answered.</span>
+                  </span>
+                </label>
               </div>
             )}
 
@@ -2460,6 +2554,7 @@ function BuilderInner() {
                             onCreateVariable={ensureVariable}
                             singleLine
                             placeholder={fieldType === "number" ? "e.g. 18" : "e.g. deeraj"}
+                            maxLength={WA_LIMITS.compareValue}
                           />
                         </label>
                       )}
@@ -2485,6 +2580,7 @@ function BuilderInner() {
                     onCreateVariable={ensureVariable}
                     rows={4}
                     placeholder="Write a friendly greeting for {{name}}…"
+                    maxLength={WA_LIMITS.aiPrompt}
                   />
                 </label>
                 <label className="form-control">
@@ -2497,10 +2593,14 @@ function BuilderInner() {
                   />
                 </label>
                 <label className="form-control">
-                  <span className="label-text">Fallback text (if the AI call fails)</span>
+                  <div className="flex items-center justify-between">
+                    <span className="label-text">Fallback text (if the AI call fails)</span>
+                    <CharCount value={selectedNode.data.config.fallbackText} max={WA_LIMITS.aiFallback} />
+                  </div>
                   <input
                     className="input input-bordered"
                     value={selectedNode.data.config.fallbackText ?? ""}
+                    maxLength={WA_LIMITS.aiFallback}
                     onChange={(e) => updateConfig("fallbackText", e.target.value)}
                   />
                 </label>
@@ -2535,6 +2635,7 @@ function BuilderInner() {
                     variables={variables}
                     onCreateVariable={ensureVariable}
                     singleLine
+                    maxLength={WA_LIMITS.value}
                   />
                 </label>
               </>
@@ -2542,12 +2643,16 @@ function BuilderInner() {
 
             {selectedNode.data.nodeType === "END" && (
               <label className="form-control">
-                <span className="label-text">Closing message (optional)</span>
+                <div className="flex items-center justify-between">
+                  <span className="label-text">Closing message (optional)</span>
+                  <CharCount value={selectedNode.data.config.text} max={WA_LIMITS.endMessage} />
+                </div>
                 <textarea
                   className="textarea textarea-bordered"
                   rows={3}
                   placeholder="e.g. Thanks for chatting with us! Send Hi any time to start again."
                   value={selectedNode.data.config.text ?? ""}
+                  maxLength={WA_LIMITS.endMessage}
                   onChange={(e) => updateConfig("text", e.target.value)}
                 />
                 <span className="text-xs text-base-content/50 mt-1">
@@ -2581,10 +2686,14 @@ function BuilderInner() {
             {selectedNode.data.nodeType === "BUTTONS" && (
               <>
                 <label className="form-control">
-                  <span className="label-text">Prompt text</span>
+                  <div className="flex items-center justify-between">
+                    <span className="label-text">Prompt text</span>
+                    <CharCount value={selectedNode.data.config.text} max={WA_LIMITS.buttonBody} />
+                  </div>
                   <textarea
                     className="textarea textarea-bordered"
                     value={selectedNode.data.config.text ?? ""}
+                    maxLength={WA_LIMITS.buttonBody}
                     onChange={(e) => updateConfig("text", e.target.value)}
                   />
                 </label>
@@ -2598,6 +2707,7 @@ function BuilderInner() {
                           className="input input-bordered input-sm flex-1"
                           placeholder="Button label"
                           value={b.label}
+                          maxLength={WA_LIMITS.buttonLabel}
                           onChange={(e) => updateOption(b.id, e.target.value)}
                         />
                         <button onClick={() => removeOption(b.id)} className="btn btn-xs btn-ghost text-error">✕</button>
@@ -2627,14 +2737,19 @@ function BuilderInner() {
                     onChange={(v) => updateConfig("text", v)}
                     variables={variables}
                     onCreateVariable={ensureVariable}
+                    maxLength={WA_LIMITS.text}
                   />
                 </label>
                 <label className="form-control">
-                  <span className="label-text">List button text</span>
+                  <div className="flex items-center justify-between">
+                    <span className="label-text">List button text</span>
+                    <CharCount value={selectedNode.data.config.buttonText} max={WA_LIMITS.listButton} />
+                  </div>
                   <input
                     className="input input-bordered input-sm"
                     placeholder="e.g. View options"
                     value={selectedNode.data.config.buttonText ?? ""}
+                    maxLength={WA_LIMITS.listButton}
                     onChange={(e) => updateConfig("buttonText", e.target.value)}
                   />
                 </label>
@@ -2686,11 +2801,15 @@ function BuilderInner() {
                           <input
                             className="w-full bg-white text-slate-800 font-medium rounded border border-slate-200 px-2.5 py-1.5 focus:outline-none focus:border-teal-500 placeholder:font-normal placeholder:text-slate-400"
                             style={{ fontSize: "12px", lineHeight: "16px" }}
-                            placeholder="Button label..."
+                            placeholder="Row title..."
                             value={r.label}
+                            maxLength={WA_LIMITS.rowTitle}
                             onChange={(e) => updateOption(r.id, e.target.value)}
                           />
                         </div>
+                        <span className="mr-1 self-center">
+                          <CharCount value={r.label} max={WA_LIMITS.rowTitle} />
+                        </span>
                         <button
                           onClick={() => removeOption(r.id)}
                           className="w-6 h-6 rounded hover:bg-rose-50 text-slate-400 hover:text-rose-600 flex items-center justify-center transition-colors"
@@ -2737,6 +2856,23 @@ function BuilderInner() {
                     <span>Add Row ({(selectedNode.data.config.rows ?? []).length} of 10 used)</span>
                   </button>
                 )}
+
+                <ChoiceBehaviour
+                  node={selectedNode}
+                  otherNodes={otherNodes}
+                  nodeName={nodeName}
+                  updateConfig={updateConfig}
+                  variables={variables}
+                  onCreateVariable={ensureVariable}
+                />
+                <NoReplyFallback
+                  node={selectedNode}
+                  otherNodes={otherNodes}
+                  nodeName={nodeName}
+                  updateConfig={updateConfig}
+                  variables={variables}
+                  onCreateVariable={ensureVariable}
+                />
               </>
             )}
 
@@ -2784,8 +2920,12 @@ function BuilderInner() {
                     rows={3}
                     placeholder="vars.name.toUpperCase()"
                     value={selectedNode.data.config.expression ?? ""}
+                    maxLength={WA_LIMITS.expression}
                     onChange={(e) => { updateConfig("expression", e.target.value); setCodeTestResult(null); }}
                   />
+                  <div className="flex justify-end">
+                    <CharCount value={selectedNode.data.config.expression} max={WA_LIMITS.expression} />
+                  </div>
                 </div>
 
                 {/* Test the expression against sample variable values */}
@@ -3113,7 +3253,8 @@ function BuilderInner() {
                         <input
                           type="text"
                           value={keywordDraft}
-                          onChange={(e) => setKeywordDraft(e.target.value)}
+                          maxLength={WA_LIMITS.keyword}
+                          onChange={(e) => setKeywordDraft(e.target.value.slice(0, WA_LIMITS.keyword))}
                           onKeyDown={(e) => {
                             if (e.key === "Enter" || e.key === ",") {
                               e.preventDefault();
