@@ -52,6 +52,16 @@ export function AiJourneyPanel({
   const [open, setOpen] = useState(false);
   useEffect(() => { onOpenChange?.(open); }, [open, onOpenChange]);
   const [mode, setMode] = useState<"create" | "edit">("create");
+  // Whether the separate AI planning stage runs. ON (default) = plan → review →
+  // build; OFF = generate directly (no plan call, no review). Persisted so a
+  // user's preference survives panel/session reloads; defaults ON on first use.
+  const [usePlanning, setUsePlanning] = useState(true);
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("ai.usePlanning");
+      if (saved === "false") setUsePlanning(false);
+    } catch { /* ignore storage errors */ }
+  }, []);
   const [phase, setPhase] = useState<Phase>("input");
   const [description, setDescription] = useState("");
   // edit-mode instruction
@@ -138,7 +148,21 @@ export function AiJourneyPanel({
   function switchMode(next: "create" | "edit") {
     setMode(next);
     setError("");
+    // A plan built for the other mode must not leak into the next generation.
+    setPlan([]);
+    if (phase === "review") setPhase("input");
     if (next === "edit") refreshNodeOptions();
+  }
+
+  // Toggle AI planning on/off. Persist the choice, and when turning it OFF drop
+  // any plan currently on screen so a direct generation can't reuse a stale one.
+  function toggleUsePlanning(next: boolean) {
+    setUsePlanning(next);
+    try { localStorage.setItem("ai.usePlanning", String(next)); } catch { /* ignore */ }
+    if (!next) {
+      setPlan([]);
+      if (phase === "review") setPhase("input");
+    }
   }
 
   // STEP 1 — ask the agent to PLAN (does not build anything).
@@ -232,6 +256,76 @@ export function AiJourneyPanel({
     }
   }
 
+  // DIRECT generation (planning OFF) — skip the plan + review entirely and build
+  // straight away. Never sends a `plan`, so no stale plan can be reused.
+  async function generateDirect() {
+    // Same per-mode input validation as createPlan().
+    if (mode === "edit") {
+      if (!instruction.trim()) { setError("Describe the change you want to make."); return; }
+    } else if (!description.trim() && !drawioXml.trim()) {
+      setError("Describe the journey or attach a draw.io diagram first.");
+      return;
+    }
+    if (hasExistingNodes) {
+      const ok = await dialog.confirm({
+        title: "Replace the current flow?",
+        message: "The flow on the canvas will be replaced with the generated one. Your published versions are not affected.",
+        confirmText: "Replace",
+      });
+      if (!ok) return;
+    }
+    setError("");
+    setWarnings([]);
+    setPlan([]);          // no plan in direct mode
+    setDiagramInfo(null);
+    setPhase("building");
+    try {
+      const body: any = mode === "edit"
+        ? {
+            editInstruction: instruction,
+            currentDefinition: getCurrentDefinition(),
+            anchorNodeId: anchorNodeId || undefined,
+            usePlanning: false,
+          }
+        : {
+            description,
+            drawioXml: drawioXml || undefined,
+            sourceName: drawioName ?? undefined,
+            apiConfigs: getCurrentDefinition()?.apiConfigs,
+            usePlanning: false,
+          };
+      const res = await api.post(`/api/chatbots/${chatbotId}/workflow/generate`, body);
+      const { definition, warnings: warns, report: rep } = res.data;
+      if (!definition) {
+        setError("The AI couldn't build a valid journey. Try rephrasing or adding detail.");
+        setPhase("input");
+        return;
+      }
+      // Diagram builds are verified on the server. Unresolved failures are
+      // never applied silently — the user decides, with the report in view.
+      if (rep?.status === "failed") {
+        const n = (rep.items ?? []).filter((i: any) => i.status === "failed").length;
+        setReport(rep);
+        const ok = await dialog.confirm({
+          title: `${n} unresolved problem${n === 1 ? "" : "s"} found`,
+          message: "Verification found differences from your diagram. Apply the journey anyway so you can fix them on the canvas? The report shows the details.",
+          confirmText: "Apply anyway",
+          tone: "warning",
+        });
+        if (!ok) { setPhase("input"); return; }
+      }
+      onApply(definition);
+      if (rep) onReport?.(rep);
+      const warnList = Array.isArray(warns) ? warns : [];
+      resetAll();
+      setReport(rep ?? null);
+      setWarnings(rep ? [] : warnList);
+    } catch (err: any) {
+      setError(err.response?.data?.error ?? "Build failed. Please try again.");
+      setPhase("input");
+    }
+  }
+
   const busy = phase === "planning" || phase === "building";
   useEffect(() => { onBuildingChange?.(phase === "building"); }, [phase, onBuildingChange]);
 
@@ -259,7 +353,7 @@ export function AiJourneyPanel({
                 <i className="ph-fill ph-sparkle text-lg text-teal-300" />
                 <div>
                   <div className="font-semibold text-sm leading-tight">AI Journey Generator</div>
-                  <div className="text-[11px] text-white/60">Plan first, then build</div>
+                  <div className="text-[11px] text-white/60">{usePlanning ? "Plan first, then build" : "Generate directly"}</div>
                 </div>
               </div>
               <button onClick={() => setOpen(false)} className="w-7 h-7 rounded-lg hover:bg-white/15 flex items-center justify-center" title="Close">
@@ -286,6 +380,30 @@ export function AiJourneyPanel({
                 className={`flex-1 px-2.5 py-1.5 rounded-md font-semibold transition disabled:opacity-40 ${mode === "edit" ? "bg-white text-slate-900 shadow-2xs" : "text-slate-500 hover:text-slate-800"}`}
               >
                 Edit current
+              </button>
+            </div>
+
+            {/* Use AI Planning toggle — controls whether the separate planning
+                stage runs before building. */}
+            <div className="flex items-start justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50/70 px-3 py-2">
+              <div className="min-w-0">
+                <div className="text-xs font-semibold text-slate-700">Use AI Planning</div>
+                <div className="text-[11px] text-slate-400 leading-snug">
+                  {usePlanning
+                    ? "Review a plan before building."
+                    : "Generate directly, skipping the plan step."}
+                </div>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={usePlanning}
+                aria-label="Use AI Planning"
+                disabled={busy}
+                onClick={() => toggleUsePlanning(!usePlanning)}
+                className={`relative shrink-0 w-10 h-6 rounded-full transition-colors disabled:opacity-50 ${usePlanning ? "bg-teal-600" : "bg-slate-300"}`}
+              >
+                <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${usePlanning ? "translate-x-4" : ""}`} />
               </button>
             </div>
 
@@ -368,14 +486,22 @@ export function AiJourneyPanel({
               </div>
             )}
 
+            {/* Direct-generation progress (no plan/diagramInfo available). */}
+            {phase === "building" && !diagramInfo && (
+              <div className="text-xs text-teal-700 bg-teal-50 border border-teal-200 rounded-lg px-3 py-2 flex items-center gap-2" role="status">
+                <i className="ph ph-spinner animate-spin" aria-hidden="true" />
+                {drawioXml ? "Generating from your diagram, then verifying — larger diagrams can take a few minutes." : "Generating your journey…"}
+              </div>
+            )}
+
             {phase === "planning" && (
               <div className="text-xs text-teal-700 bg-teal-50 border border-teal-200 rounded-lg px-3 py-2 flex items-center gap-2">
                 <i className="ph ph-spinner animate-spin" /> {mode === "edit" ? "Planning the change…" : "Planning the journey…"}
               </div>
             )}
 
-            {/* Agent plan — shown for review/approval before building */}
-            {plan.length > 0 && (
+            {/* Agent plan — shown for review/approval before building (planning ON only) */}
+            {usePlanning && plan.length > 0 && (
               <div className="rounded-lg border border-teal-200 bg-teal-50/50 p-3">
                 <div className="flex items-center gap-1.5 text-xs font-semibold text-teal-800 mb-2">
                   <i className="ph-fill ph-list-checks" /> Proposed plan ({plan.length} stages)
@@ -439,7 +565,7 @@ export function AiJourneyPanel({
               </div>
             )}
 
-            {phase === "review" && warnings.length === 0 && plan.length > 0 && (
+            {usePlanning && phase === "review" && warnings.length === 0 && plan.length > 0 && (
               <p className="text-[11px] text-slate-400">
                 Review the plan above. Approve it to update the canvas — you can still edit everything
                 before publishing.
@@ -447,9 +573,19 @@ export function AiJourneyPanel({
             )}
           </div>
 
-          {/* Footer — plan → approve → build, in both create and edit modes */}
+          {/* Footer — plan → approve → build (planning ON) or direct generate (OFF) */}
           <div className="p-3 border-t border-slate-200 flex items-center justify-end gap-2">
-            {phase === "review" ? (
+            {!usePlanning ? (
+              // Direct generation: a single Generate button, no review step.
+              <button
+                onClick={generateDirect}
+                disabled={busy}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-teal-700 hover:bg-teal-800 text-white text-sm font-semibold shadow-sm active:scale-[0.99] transition disabled:opacity-60"
+              >
+                <i className={`ph-bold ${busy ? "ph-spinner animate-spin" : "ph-sparkle"}`} />
+                {phase === "building" ? "Generating…" : mode === "edit" ? "Generate update" : "Generate"}
+              </button>
+            ) : phase === "review" ? (
               <>
                 <button
                   onClick={reset}

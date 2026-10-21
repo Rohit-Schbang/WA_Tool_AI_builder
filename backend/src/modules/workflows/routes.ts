@@ -226,6 +226,11 @@ const generateSchema = z.object({
   }).passthrough().optional(),
   // Optional: pin where the edit applies (a node id) so the AI doesn't guess.
   anchorNodeId: z.string().optional(),
+  // Whether the separate AI planning stage runs. Defaults to true so existing
+  // clients (which omit this) keep the current plan-first behaviour. When
+  // false, the backend skips planJourney()/planFromDiagram() and builds
+  // directly. Requests are JSON, so this arrives as a real boolean.
+  usePlanning: z.boolean().optional().default(true),
   // The builder's current global API configs, so the AI can reference them by
   // name (API_REQUEST nodes are global-config-only; no inline URLs).
   apiConfigs: z.array(z.object({
@@ -304,7 +309,7 @@ workflowsRouter.post("/generate", async (req: Request, res: Response) => {
   const parsed = generateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "Invalid input", details: parsed.error.flatten() });
 
-  const { description, drawioXml, plan, editInstruction, currentDefinition, anchorNodeId, apiConfigs } = parsed.data;
+  const { description, drawioXml, plan, editInstruction, currentDefinition, anchorNodeId, apiConfigs, usePlanning } = parsed.data;
   const isEdit = !!(editInstruction?.trim() && currentDefinition);
   if (!description.trim() && !drawioXml?.trim() && !(plan && plan.length) && !isEdit) {
     return res.status(400).json({ error: "Provide a description, a draw.io diagram, or an edit instruction." });
@@ -313,12 +318,17 @@ workflowsRouter.post("/generate", async (req: Request, res: Response) => {
 
   try {
     const editCtx = isEdit ? makeEditContext(currentDefinition, editInstruction!, anchorNodeId) : undefined;
-    const result = await generateJourney(description, drawioXml, plan as any, editCtx, configs);
+    // When planning is OFF we never pass a plan through, so a stale/supplied
+    // plan can't be reused — the generator builds directly (server-side
+    // enforcement, not just the frontend skipping the plan step).
+    const approvedPlan = usePlanning ? (plan as any) : undefined;
+    const result = await generateJourney(description, drawioXml, approvedPlan, editCtx, configs, { usePlanning });
     const definition = result.definition ? ensureSingleStart(result.definition as any) : null;
     logActivity(req, "workflow.ai_generate", {
       chatbotId,
       details: {
         mode: isEdit ? "edit" : "create",
+        usePlanning,
         nodes: definition?.nodes.length ?? 0,
         usedDrawio: !!drawioXml,
         ...(result.report ? { fidelity: result.report.status, failedChecks: result.report.items.filter((i) => i.status === "failed").length } : {}),

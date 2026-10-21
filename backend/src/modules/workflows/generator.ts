@@ -452,21 +452,44 @@ function specToPlan(spec: FlowSpec, d: ParsedDiagram): PlanStage[] {
   return stages;
 }
 
+// Derive a plan from the parser's own keyword hints (shape.suggested), with NO
+// AI call. Used for diagram mode when AI planning is turned OFF: the resulting
+// stages are fed through the normal specFromPlan() so stable ids, coverage,
+// skip/merge handling and layout are preserved exactly as in the AI path. The
+// "suggested" string looks like "SEND_MESSAGE with buttons" / "USER ACTION …";
+// we take the leading token, and non-type tokens (USER/SYSTEM/NOTE/UNCLEAR)
+// fall through to specFromPlan's own classification/skip logic.
+function planFromHints(d: ParsedDiagram): PlanStage[] {
+  return d.shapes
+    .filter((s) => !s.isEnd)
+    .map((s, i) => ({
+      step: i + 1,
+      title: s.label.slice(0, 60),
+      nodeType: s.isStart ? "START" : s.suggested.split(/[ (]/)[0],
+      detail: "",
+      sourceIds: [s.id],
+    }));
+}
+
 // ---------------------------------------------------------------------------
 // STEP 2 — BUILD
 // ---------------------------------------------------------------------------
 async function buildFromPlan(description: string, plan: PlanStage[], fixErrors?: string[], apiConfigs?: any[]): Promise<GeneratedDefinition> {
+  // With AI planning OFF the plan is empty — tell the model to design the whole
+  // journey from the description instead of "following" a non-existent plan.
+  const planBlock = plan.length
+    ? `following the APPROVED PLAN below EXACTLY — one node per stage, with the
+branches each stage describes. Do not invent extra stages or drop any.`
+    : `designing the COMPLETE journey yourself from the user's description below.
+There is no pre-approved plan: decide the stages, messages and branches so the
+flow fully delivers what the description asks for.`;
   let p = `You are an expert WhatsApp chatbot flow builder. Build the workflow JSON by
-following the APPROVED PLAN below EXACTLY — one node per stage, with the
-branches each stage describes. Do not invent extra stages or drop any.
+${planBlock}
 
 ${NODE_CATALOG}
 ${RULES}
 ${apiConfigsBlock(apiConfigs)}
-
-APPROVED PLAN (follow it stage by stage):
-${JSON.stringify(plan, null, 2)}
-
+${plan.length ? `\nAPPROVED PLAN (follow it stage by stage):\n${JSON.stringify(plan, null, 2)}\n` : ""}
 Original user description (for wording of messages etc.):
 """\n${description || "(none provided)"}\n"""\n`;
   if (fixErrors && fixErrors.length) {
@@ -706,16 +729,21 @@ export async function generateJourney(
   drawioXml?: string,
   approvedPlan?: PlanStage[],
   edit?: EditContext,
-  apiConfigs?: any[]
+  apiConfigs?: any[],
+  opts: { usePlanning?: boolean } = {}
 ): Promise<GenerateResult> {
+  // AI planning is ON unless explicitly disabled. When OFF we never call the
+  // planning model (planJourney / planFromDiagram); we build directly.
+  const usePlanning = opts.usePlanning !== false;
   const diagram = edit ? null : loadDiagram(drawioXml);
   assertDiagramSize(diagram);
   const useDiagram = !!diagram && diagram.shapes.length > 0;
   const warnings: string[] = useDiagram ? [...diagram!.warnings] : [];
 
-  // 1) PLAN — reuse the user-approved plan if provided, else generate one.
+  // 1) PLAN — reuse the user-approved plan if provided; otherwise generate one
+  //    with the planning model, but ONLY when AI planning is enabled.
   let plan: PlanStage[] = Array.isArray(approvedPlan) && approvedPlan.length ? approvedPlan : [];
-  if (!plan.length) {
+  if (!plan.length && usePlanning) {
     try {
       plan = await planJourney(description, useDiagram ? diagram : null, edit, apiConfigs);
     } catch {
@@ -723,7 +751,13 @@ export async function generateJourney(
     }
   }
 
-  if (useDiagram) return generateFromDiagram(description, plan, diagram!, apiConfigs, warnings);
+  if (useDiagram) {
+    // Diagram mode still needs a spec (stable ids, coverage, layout, fidelity).
+    // With planning OFF we derive that spec from the parser's hints instead of
+    // paying for the AI classification call.
+    const planForSpec = plan.length ? plan : (usePlanning ? plan : planFromHints(diagram!));
+    return generateFromDiagram(description, planForSpec, diagram!, apiConfigs, warnings);
+  }
 
   // 2) BUILD (description / edit modes)
   let def: GeneratedDefinition;

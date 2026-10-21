@@ -832,6 +832,10 @@ export function specCoverage(def: { nodes: any[]; edges: any[] }, spec: FlowSpec
 
 // Place each block where its diagram shape is (scaled up: canvas cards are much
 // bigger than draw.io boxes), so the canvas mirrors the source layout.
+// Two branch targets within this many pixels of vertical distance are treated
+// as being on the same row for the handle-order swap in layoutFromSpec.
+const NODE_H_TOLERANCE = 80;
+
 export function layoutFromSpec<T extends { nodes: any[] }>(def: T, spec: FlowSpec, d: ParsedDiagram): T {
   const shapeById = new Map(d.shapes.map((s) => [s.id, s]));
   const anchor = new Map<string, DiagramShape>();
@@ -862,5 +866,37 @@ export function layoutFromSpec<T extends { nodes: any[] }>(def: T, spec: FlowSpe
     const ref = nodes.find((m) => m.id === (next ?? prev) && anchor.has(String(m.id)));
     if (ref) n.position = { x: ref.position.x + (next ? 0 : 340), y: ref.position.y + (next ? -170 : 170) };
   }
+
+  // Handle-order consistency (conservative): a CONDITION/API_REQUEST draws its
+  // "true"/"success" handle on the LEFT and "else"/"failure" on the RIGHT. If
+  // the diagram happened to place the true-branch target to the RIGHT of the
+  // else-branch target at roughly the same level, the edges cross and the
+  // labels read on the wrong side. Swap ONLY that clear same-row reversal so
+  // the rest of the drawn layout is preserved.
+  const edges: any[] = Array.isArray((def as any).edges) ? (def as any).edges : [];
+  if (edges.length) {
+    const nodeById = new Map(nodes.map((n) => [String(n.id), n]));
+    const branchTypes = new Set(["CONDITION", "API_REQUEST"]);
+    for (const n of nodes) {
+      if (!branchTypes.has(String((n as any).nodeType))) continue;
+      const trueTarget = edges.find((e) => e.source === n.id && e.sourceHandle === "true")?.target;
+      const elseTarget = edges.find((e) => e.source === n.id && e.sourceHandle === "else")?.target;
+      if (!trueTarget || !elseTarget || trueTarget === elseTarget) continue;
+      const tn = nodeById.get(String(trueTarget));
+      const en = nodeById.get(String(elseTarget));
+      if (!tn || !en) continue;
+      // Each target must have exactly this node as parent (sole-parent guard),
+      // sit at roughly the same y (same row), and currently be reversed.
+      const soleParent = (id: string) => edges.filter((e) => e.target === id).length === 1;
+      if (!soleParent(String(trueTarget)) || !soleParent(String(elseTarget))) continue;
+      const sameRow = Math.abs((tn.position?.y ?? 0) - (en.position?.y ?? 0)) <= NODE_H_TOLERANCE;
+      if (sameRow && (tn.position?.x ?? 0) > (en.position?.x ?? 0)) {
+        const tmp = tn.position.x;
+        tn.position = { ...tn.position, x: en.position.x };
+        en.position = { ...en.position, x: tmp };
+      }
+    }
+  }
+
   return { ...def, nodes };
 }
