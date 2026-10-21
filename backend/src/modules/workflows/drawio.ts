@@ -484,8 +484,15 @@ where the BOT does something become workflow blocks.
 4. BOT MESSAGE (bot says / sends / shows / greets / confirms / informs): SEND_MESSAGE.
    Its text must be the words the user will read, not a description of the step.
 5. BOT QUESTION (ask for / collect / "Enter your …" / "What is your …?"): ASK_INPUT
-   (validationType email/phone/number when obvious; expectedType for photo, document,
-   location, audio).
+   (validationType email/phone/number when obvious). SET expectedType to the attachment
+   the question asks for — do NOT leave it "text" or "any" when a file is requested:
+     • "record / upload / send a video", "testimonial video", "share a clip" → expectedType "video"
+     • "photo / picture / image / selfie / screenshot" → "image"
+     • "document / file / PDF / resume / receipt" → "document"
+     • "voice note / audio / recording" → "audio"
+     • "location / address pin / share location" → "location"
+   Use "any" ONLY when the question truly accepts either text or a file. A wrong
+   expectedType makes the bot store a file answer as plain text, so pick the exact type.
 6. MENU / OPTIONS (choose one of several branches): SEND_MESSAGE with cta buttons (≤3)
    or LIST (4+). Each branch becomes a button/row.
 7. DECISION / CHECK (diamonds, "Is …?", "Registered?", "If …"): CONDITION on the relevant

@@ -7,6 +7,7 @@ import { prisma } from "../../infra/prisma.js";
 import { runEngine, RunResult } from "../runtime/engine.js";
 import { MessagingAdapter, WorkflowDefinition, ExecutionContext, WorkflowNode, InboundType, InboundMedia } from "../runtime/types.js";
 import { LoggingAdapter } from "../messaging/loggingAdapters.js";
+import { storeInboundMedia } from "../messaging/mediaStore.js";
 
 // #2 — build the initial variables map from the workflow's declared variables
 // and their default values. Coerces to the declared type.
@@ -157,7 +158,18 @@ export async function handleInboundMessage(
     }
 
     const inboundType: InboundType = opts.inbound?.type ?? "text";
-    const inboundMedia: InboundMedia | null = opts.inbound?.media ?? null;
+    let inboundMedia: InboundMedia | null = opts.inbound?.media ?? null;
+
+    // Persist any inbound file (photo/video/document/audio) to durable storage
+    // before the engine runs, so a Question that captures media gets a lasting
+    // URL rather than a Meta media id that expires. Best-effort: on any failure
+    // we keep the original metadata so the answer is never dropped.
+    if (inboundMedia?.id && ["image", "video", "audio", "document"].includes(inboundType)) {
+        const conn = await prisma.connection.findUnique({ where: { chatbotId }, select: { accessToken: true } });
+        if (conn?.accessToken) {
+            inboundMedia = await storeInboundMedia(inboundMedia, inboundType, conn.accessToken, chatbotId);
+        }
+    }
 
     const context: ExecutionContext = {
         userId: waUserId,

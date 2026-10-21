@@ -76,6 +76,7 @@ export interface InboundMedia {
     sha256?: string;
     latitude?: number;    // location
     longitude?: number;   // location
+    url?: string;         // durable hosted URL after the file is stored (Supabase)
 }
 
 export interface ExecutionContext {
@@ -132,8 +133,10 @@ export interface MessagingAdapter {
 
 // What an executor returns: what the engine should do next.
 export type ExecutorResult =
-    // Move to the next node (engine follows the outgoing edge).
-    | { action: "next"; handle?: string }
+    // Move to the next node. `handle` follows a specific outgoing edge
+    // (true/else/option id); `goToNodeId` jumps to an explicit node id
+    // regardless of edges (used by the choice wrong-reply fallback).
+    | { action: "next"; handle?: string; goToNodeId?: string }
     // Pause and wait for the user's next message (ASK_INPUT, WAIT).
     | { action: "wait" }
     // The workflow has ended.

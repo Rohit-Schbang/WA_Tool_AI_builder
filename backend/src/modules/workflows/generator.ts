@@ -54,7 +54,7 @@ Available node types and their config fields (use ONLY these):
     footer?: string, expectedType?: "text"|"image"|"audio"|"document"|"video"|"location"|"any",
     validationType?: "none"|"phone"|"email"|"url"|"number"|"alphanumeric"|"custom",
     regex?: string, retryLimit?: number, failureMessage?: string }
-    (expectedType defaults to "text"; set it to a media type to require the user to send a photo/audio/document/video/location. validationType/regex apply ONLY when expectedType is "text".)
+    (expectedType defaults to "text". When the question asks for a FILE, set the exact media type — "record/upload a video" or "testimonial video" → "video"; photo/picture/selfie → "image"; document/file/PDF → "document"; voice note/audio → "audio"; location → "location". Never use "text" or "any" for a file request. validationType/regex apply ONLY when expectedType is "text".)
 - LIST: prompt with a list of options. config: { text: string, buttonText?: string,
     rows: [{ id: string, label: string }] } (each row branches via an edge whose sourceHandle = the row id)
 - CONDITION: branch on a variable. config: { field: string, value: string }

@@ -13,6 +13,70 @@ const start: NodeExecutor = async () => {
   return { action: "next" };
 };
 
+// ---------------------------------------------------------------------------
+// Shared logic for CHOICE nodes (Send Message w/ CTA buttons, BUTTONS, LIST):
+//   - lock on backtrack (config.lockAfterAnswer): ignore a 2nd selection
+//   - store the chosen option in a variable (config.answerVariable/answerValue)
+//   - wrong-reply handling (config.invalidReply): re-prompt N times, then
+//     optionally route to a fallback node (else keep waiting)
+// `reprompt` re-sends the node's prompt/options (same as the arrival branch).
+// ---------------------------------------------------------------------------
+type ChoiceOption = { id: string; label: string };
+
+async function resolveChoice(
+  node: any,
+  ctx: Parameters<NodeExecutor>[1],
+  options: ChoiceOption[],
+  reprompt: () => Promise<void>
+): Promise<ExecutorResult | { matched: ChoiceOption }> {
+  const cfg = node.config ?? {};
+  const lockKey = `__answered_${node.id}`;
+
+  // Backtrack lock: already answered and locked -> gently refuse, don't branch.
+  if (cfg.lockAfterAnswer && ctx.variables[lockKey]) {
+    const msg = cfg.lockedMessage
+      ? interpolate(String(cfg.lockedMessage), ctx.variables)
+      : "You've already answered this step.";
+    await ctx.messaging.sendText(ctx.userId, msg);
+    return { action: "wait" };
+  }
+
+  const reply = (ctx.incomingText ?? "").trim().toLowerCase();
+  const matched = options.find((o) => o.label.trim().toLowerCase() === reply || o.id === ctx.incomingText);
+
+  if (!matched) {
+    const inv = cfg.invalidReply ?? {};
+    const retryKey = `__invalid_${node.id}`;
+    const attempts = Number(ctx.variables[retryKey] ?? 0) + 1;
+    const max = Math.max(1, Math.min(5, Number(inv.maxRetries ?? 3)));
+
+    if (attempts >= max) {
+      delete ctx.variables[retryKey];
+      if (inv.goToNodeId) {
+        if (inv.message) await ctx.messaging.sendText(ctx.userId, interpolate(String(inv.message), ctx.variables));
+        return { action: "next", handle: "__invalid__", goToNodeId: inv.goToNodeId };
+      }
+      // No fallback node: keep waiting (count reset so it can prompt again).
+      await ctx.messaging.sendText(ctx.userId, interpolate(String(inv.message || "Please pick one of the options."), ctx.variables));
+      await reprompt();
+      return { action: "wait" };
+    }
+
+    ctx.variables[retryKey] = attempts;
+    await ctx.messaging.sendText(ctx.userId, interpolate(String(inv.message || "Please pick one of the options below."), ctx.variables));
+    await reprompt();
+    return { action: "wait" };
+  }
+
+  // Matched: clear retry, store the selection, set the lock flag.
+  delete ctx.variables[`__invalid_${node.id}`];
+  if (cfg.answerVariable) {
+    ctx.variables[cfg.answerVariable] = cfg.answerValue === "id" ? matched.id : matched.label;
+  }
+  if (cfg.lockAfterAnswer) ctx.variables[lockKey] = true;
+  return { matched };
+}
+
 const sendMessage: NodeExecutor = async (node, ctx) => {
   const cfg = node.config ?? {};
   const body = interpolate(cfg.text ?? "", ctx.variables);
@@ -39,20 +103,14 @@ const sendMessage: NodeExecutor = async (node, ctx) => {
 
   // CTA (reply) buttons -> send prompt + buttons, wait, branch by choice.
   if (ctaButtons.length > 0) {
-    if (ctx.incomingText === null) {
-      if (ctx.messaging.sendButtons) {
-        await ctx.messaging.sendButtons(ctx.userId, body, ctaButtons);
-      } else {
-        await ctx.messaging.sendText(ctx.userId, body);
-      }
-      return { action: "wait" };
-    }
-    const reply = ctx.incomingText.trim().toLowerCase();
-    const chosen = ctaButtons.find(
-      (o) => o.label.trim().toLowerCase() === reply || o.id === ctx.incomingText
-    );
-    if (!chosen) return { action: "wait" }; // no match — re-wait
-    return { action: "next", handle: chosen.id };
+    const send = async () => {
+      if (ctx.messaging.sendButtons) await ctx.messaging.sendButtons(ctx.userId, body, ctaButtons);
+      else await ctx.messaging.sendText(ctx.userId, body);
+    };
+    if (ctx.incomingText === null) { await send(); return { action: "wait" }; }
+    const res = await resolveChoice(node, ctx, ctaButtons, send);
+    if ("matched" in res) return { action: "next", handle: res.matched.id };
+    return res;
   }
 
   // #12 — no buttons: header/body/footer rich message.
@@ -125,6 +183,15 @@ const askInput: NodeExecutor = async (node, ctx) => {
     return { action: "wait" };
   }
 
+  // Backtrack lock: if the user already answered and the node is locked,
+  // don't re-ask or overwrite — just acknowledge and move on.
+  const lockKey = `__answered_${node.id}`;
+  if (cfg.lockAfterAnswer && ctx.variables[lockKey]) {
+    const msg = cfg.lockedMessage ? interpolate(String(cfg.lockedMessage), ctx.variables) : "You've already answered this.";
+    await ctx.messaging.sendText(ctx.userId, msg);
+    return { action: "next" };
+  }
+
   const expectedType: string = (cfg.expectedType ?? "text").toLowerCase();
   const validationType = cfg.validationType ?? "none";
   const variable = cfg.variable;
@@ -136,8 +203,11 @@ const askInput: NodeExecutor = async (node, ctx) => {
   // (media id/caption/etc) so later nodes can download/forward it; for text we
   // store the string exactly as before.
   const storeAnswer = () => {
+    if (cfg.lockAfterAnswer) ctx.variables[lockKey] = true;
     if (!variable) return;
-    if (expectedType !== "text" && expectedType !== "any" && media) {
+    // Store a media object whenever the reply actually carried media (covers
+    // expectedType "any" too). Plain text answers store the string as before.
+    if (media && incomingType !== "text" && incomingType !== "interactive") {
       ctx.variables[variable] = { type: incomingType, ...media, text: ctx.incomingText || undefined };
     } else {
       ctx.variables[variable] = ctx.incomingText;
@@ -173,6 +243,8 @@ const askInput: NodeExecutor = async (node, ctx) => {
   }
 
   // 2) For media/location/any answers, there's no text regex to run — accept.
+  //    (storeAnswer saves a media object when the reply carries media, even for
+  //    expectedType "any", so a video/photo isn't flattened to a string.)
   if (expectedType !== "text" || validationType === "none") {
     storeAnswer();
     delete ctx.variables[retryKey];
@@ -298,52 +370,29 @@ const end: NodeExecutor = async (node, ctx) => {
 };
 
 const buttons: NodeExecutor = async (node, ctx) => {
-  // Arriving: send the prompt with buttons, then wait.
-  if (ctx.incomingText === null) {
+  const opts: ChoiceOption[] = node.config.buttons ?? [];
+  const send = async () => {
     const text = interpolate(node.config.text ?? "", ctx.variables);
-    const opts = node.config.buttons ?? [];
-    // For the console/test adapter we just send text + options as a hint.
-    // (The WhatsApp adapter will render real buttons — added separately.)
-    if (ctx.messaging.sendButtons) {
-      await ctx.messaging.sendButtons(ctx.userId, text, opts);
-    } else {
-      await ctx.messaging.sendText(ctx.userId, text);
-    }
-    return { action: "wait" };
-  }
-
-  // Resuming: match the user's reply to a button (by label or id).
-  const opts: { id: string; label: string }[] = node.config.buttons ?? [];
-  const reply = ctx.incomingText.trim().toLowerCase();
-  const chosen = opts.find(
-    (o) => o.label.trim().toLowerCase() === reply || o.id === ctx.incomingText
-  );
-  if (!chosen) {
-    // No match — re-ask by waiting again.
-    return { action: "wait" };
-  }
-  return { action: "next", handle: chosen.id };
+    if (ctx.messaging.sendButtons) await ctx.messaging.sendButtons(ctx.userId, text, opts);
+    else await ctx.messaging.sendText(ctx.userId, text);
+  };
+  if (ctx.incomingText === null) { await send(); return { action: "wait" }; }
+  const res = await resolveChoice(node, ctx, opts, send);
+  if ("matched" in res) return { action: "next", handle: res.matched.id };
+  return res;
 };
 
 const list: NodeExecutor = async (node, ctx) => {
-  if (ctx.incomingText === null) {
+  const rows: ChoiceOption[] = node.config.rows ?? [];
+  const send = async () => {
     const text = interpolate(node.config.text ?? "", ctx.variables);
-    const rows = node.config.rows ?? [];
-    if (ctx.messaging.sendList) {
-      await ctx.messaging.sendList(ctx.userId, text, node.config.buttonText ?? "Select", rows);
-    } else {
-      await ctx.messaging.sendText(ctx.userId, text);
-    }
-    return { action: "wait" };
-  }
-
-  const rows: { id: string; label: string }[] = node.config.rows ?? [];
-  const reply = ctx.incomingText.trim().toLowerCase();
-  const chosen = rows.find(
-    (r) => r.label.trim().toLowerCase() === reply || r.id === ctx.incomingText
-  );
-  if (!chosen) return { action: "wait" };
-  return { action: "next", handle: chosen.id };
+    if (ctx.messaging.sendList) await ctx.messaging.sendList(ctx.userId, text, node.config.buttonText ?? "Select", rows);
+    else await ctx.messaging.sendText(ctx.userId, text);
+  };
+  if (ctx.incomingText === null) { await send(); return { action: "wait" }; }
+  const res = await resolveChoice(node, ctx, rows, send);
+  if ("matched" in res) return { action: "next", handle: res.matched.id };
+  return res;
 };
 
 const aiResponse: NodeExecutor = async (node, ctx) => {

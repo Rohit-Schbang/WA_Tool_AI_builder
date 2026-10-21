@@ -83,6 +83,16 @@ export async function runEngine(def: WorkflowDefinition, StartNodeId: string, co
             return { pausedAtNodeId: null, status: "completed" }
         }
 
+        // Explicit jump (e.g. a choice node's wrong-reply fallback) — go to the
+        // named node directly, not via an edge.
+        if (result.goToNodeId) {
+            context.incomingText = null
+            context.incomingType = null
+            context.incomingMedia = null
+            currentId = result.goToNodeId
+            continue
+        }
+
         // action === "next": follow the edge to the next node.
         // After the first executor runs, clear incomingText so downstream
         // ASK_INPUT nodes see "arriving" (null), not the old message.
