@@ -1,3 +1,5 @@
+import { WA_LIMITS } from "./waLimits";
+
 interface WorkflowNode {
     id: string;
     nodeType: string;
@@ -195,6 +197,99 @@ export function validateWorkflow(def: WorkflowDefinition): ValidationResult {
                 push(`"${name}": the ${isList ? "option" : "button"} "${label}" is not connected to any node.`, node.id)
             }
         });
+    }
+
+    // 8. Character / count limits (WhatsApp Cloud API). Mirrors the live
+    //    maxLength + counters in the builder so an AI-generated or imported
+    //    flow can't publish an over-limit field. Variable interpolation can
+    //    make the final string longer at send time; we validate the authored
+    //    template length, which is the best we can check ahead of time.
+    const len = (v: any) => (v == null ? 0 : String(v).length);
+
+    for (const node of nodes) {
+        const config = node.config ?? {};
+        const name = nodeName(node);
+
+        // Reusable field check: push an error when a field exceeds its cap.
+        const checkLen = (value: any, max: number, label: string) => {
+            const n = len(value);
+            if (n > max) push(`"${name}": ${label} is ${n} characters (max ${max}).`, node.id);
+        };
+
+        switch (node.nodeType) {
+            case "SEND_MESSAGE": {
+                const buttons: any[] = Array.isArray(config.buttons) ? config.buttons : [];
+                const hasReplyButtons = buttons.some((b) => (b?.kind ?? "cta") === "cta");
+                // Reply buttons shrink the allowed body from 4096 to 1024.
+                const bodyMax = hasReplyButtons ? WA_LIMITS.buttonBody : WA_LIMITS.text;
+                checkLen(config.text, bodyMax, hasReplyButtons ? "message text (with buttons)" : "message text");
+                checkLen(config.footer, WA_LIMITS.footer, "footer");
+                if (config.header?.type === "text") checkLen(config.header?.value, WA_LIMITS.header, "header text");
+                if (buttons.length > WA_LIMITS.maxButtons) push(`"${name}": ${buttons.length} buttons (max ${WA_LIMITS.maxButtons}).`, node.id);
+                buttons.forEach((b, i) => checkLen(b?.label, WA_LIMITS.buttonLabel, `button ${i + 1} label`));
+                break;
+            }
+            case "BUTTONS": {
+                const buttons: any[] = Array.isArray(config.buttons) ? config.buttons : [];
+                checkLen(config.text, WA_LIMITS.buttonBody, "message text");
+                if (buttons.length > WA_LIMITS.maxButtons) push(`"${name}": ${buttons.length} buttons (max ${WA_LIMITS.maxButtons}).`, node.id);
+                buttons.forEach((b, i) => checkLen(b?.label, WA_LIMITS.buttonLabel, `button ${i + 1} label`));
+                break;
+            }
+            case "LIST": {
+                const rows: any[] = Array.isArray(config.rows) ? config.rows : [];
+                checkLen(config.text, WA_LIMITS.text, "prompt text");
+                checkLen(config.footer, WA_LIMITS.footer, "footer");
+                if (config.header?.type === "text") checkLen(config.header?.value, WA_LIMITS.header, "header text");
+                checkLen(config.buttonText, WA_LIMITS.listButton, "list button text");
+                if (rows.length > WA_LIMITS.maxRows) push(`"${name}": ${rows.length} rows (max ${WA_LIMITS.maxRows}).`, node.id);
+                rows.forEach((r, i) => {
+                    checkLen(r?.label, WA_LIMITS.rowTitle, `row ${i + 1} title`);
+                    checkLen(r?.description, WA_LIMITS.rowDescription, `row ${i + 1} description`);
+                });
+                break;
+            }
+            case "ASK_INPUT": {
+                checkLen(config.text, WA_LIMITS.question, "question text");
+                checkLen(config.footer, WA_LIMITS.footer, "footer");
+                checkLen(config.failureMessage, WA_LIMITS.failureMessage, "failure message");
+                checkLen(config.variable, WA_LIMITS.variableName, "variable name");
+                break;
+            }
+            case "AI_RESPONSE": {
+                checkLen(config.prompt, WA_LIMITS.aiPrompt, "prompt");
+                checkLen(config.fallbackText, WA_LIMITS.aiFallback, "fallback text");
+                break;
+            }
+            case "SET_VARIABLE": {
+                checkLen(config.variable, WA_LIMITS.variableName, "variable name");
+                checkLen(config.value, WA_LIMITS.value, "value");
+                break;
+            }
+            case "TRANSFORM": {
+                checkLen(config.variable, WA_LIMITS.variableName, "output variable name");
+                checkLen(config.expression, WA_LIMITS.expression, "expression");
+                break;
+            }
+            case "CONDITION": {
+                checkLen(config.value, WA_LIMITS.compareValue, "compare value");
+                break;
+            }
+            case "VALIDATE": {
+                checkLen(config.pattern, WA_LIMITS.regexPattern, "regex pattern");
+                checkLen(config.expression, WA_LIMITS.expression, "expression");
+                break;
+            }
+            case "END": {
+                checkLen(config.text, WA_LIMITS.endMessage, "closing message");
+                break;
+            }
+            case "START": {
+                const keywords: any[] = Array.isArray(config.keywords) ? config.keywords : [];
+                keywords.forEach((k, i) => checkLen(k, WA_LIMITS.keyword, `keyword ${i + 1}`));
+                break;
+            }
+        }
     }
 
     return { valid: errors.length === 0, errors }
