@@ -8,6 +8,11 @@ import { runEngine, RunResult } from "../runtime/engine.js";
 import { MessagingAdapter, WorkflowDefinition, ExecutionContext, WorkflowNode, InboundType, InboundMedia } from "../runtime/types.js";
 import { LoggingAdapter } from "../messaging/loggingAdapters.js";
 import { storeInboundMedia } from "../messaging/mediaStore.js";
+import { ensureContactForWaUser } from "../contacts/service.js";
+
+// The web tester talks to the engine as this fixed user id; it is not a real
+// WhatsApp number, so we never create a Contact for it.
+const TEST_WA_USER_ID = "web-test";
 
 // #2 — build the initial variables map from the workflow's declared variables
 // and their default values. Coerces to the declared type.
@@ -61,7 +66,9 @@ export async function handleInboundMessage(
     // node can expect a specific input type (image/audio/document/…). It's
     // optional: callers that only have text (e.g. the web tester) omit it and
     // the message is treated as plain text, exactly as before.
-    opts: { bypassTrigger?: boolean; useDraft?: boolean; inbound?: { type: InboundType; media?: InboundMedia | null } } = {}
+    // `profileName` is the WhatsApp display name from the webhook (if any); used
+    // to name a freshly auto-created Contact. Omitted by the web tester.
+    opts: { bypassTrigger?: boolean; useDraft?: boolean; profileName?: string | null; inbound?: { type: InboundType; media?: InboundMedia | null } } = {}
 ): Promise<{ status: string }> {
 
 
@@ -117,6 +124,17 @@ export async function handleInboundMessage(
                 variables: seeded
             }
         })
+
+        // A real WhatsApp user has started a journey -> make sure they appear in
+        // Contacts (global, deduped by phone). Best-effort: never block or fail
+        // the conversation if this doesn't work. Skips the web tester.
+        if (waUserId !== TEST_WA_USER_ID) {
+            try {
+                await ensureContactForWaUser(chatbot.ownerId, waUserId, opts.profileName);
+            } catch (err) {
+                console.error("Auto-create contact failed:", err);
+            }
+        }
     }
 
     // A finished (or failed) journey restarts when the user sends the trigger
