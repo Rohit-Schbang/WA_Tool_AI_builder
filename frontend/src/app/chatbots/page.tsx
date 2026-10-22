@@ -8,7 +8,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Sidebar } from "@/app/components/Sidebar";
 import { EditableBotName } from "@/app/components/EditableBotName";
 import { dialog } from "@/app/components/Dialog";
-import { downloadJson, journeyFileName } from "@/lib/exportJourney";
+import { downloadJson, journeyFileName, wrapJourneyExport } from "@/lib/exportJourney";
 
 
 
@@ -113,15 +113,22 @@ export default function ChatbotsPage() {
     }
 
     //  ---------------------->>> Export the bot's saved journey (draft) as JSON
-    async function handleExport(id: string, name: string) {
+    async function handleExport(bot: Chatbot) {
         if (exportingId) return
-        setExportingId(id)
+        setExportingId(bot.id)
         setError("")
         try {
-            const res = await api.get(`/api/chatbots/${id}/workflow/draft`)
+            const res = await api.get(`/api/chatbots/${bot.id}/workflow/draft`)
             // The draft row carries the journey under `.definition`.
             const definition = res.data?.definition ?? res.data
-            downloadJson(definition, journeyFileName(name))
+            const data = wrapJourneyExport(definition, {
+                chatbotId: bot.id,
+                name: bot.name,
+                isActive: bot.isActive,
+                createdAt: bot.createdAt,
+                source: "draft",
+            })
+            downloadJson(data, journeyFileName(bot.name))
         } catch (err: any) {
             setError(
                 err?.response?.status === 404
@@ -397,7 +404,7 @@ export default function ChatbotsPage() {
                                             </div>
                                             <div className="flex items-center gap-1">
                                                 <button
-                                                    onClick={() => handleExport(bot.id, bot.name)}
+                                                    onClick={() => handleExport(bot)}
                                                     disabled={exportingId === bot.id}
                                                     className="inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-surface-container-high hover:bg-surface-container text-on-surface font-label-md text-label-md font-medium transition-all disabled:opacity-60"
                                                     title="Export this journey as JSON"
