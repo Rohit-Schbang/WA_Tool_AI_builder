@@ -33,7 +33,7 @@ import { dialog } from "@/app/components/Dialog";
 import { useAutoSave, readLocalDraft, clearLocalDraft } from "./useAutoSave";
 import { AiJourneyPanel } from "./AiJourneyPanel";
 import { WA_LIMITS } from "@/lib/waLimits";
-import { downloadJson, journeyFileName } from "@/lib/exportJourney";
+import { downloadJson, journeyFileName, wrapJourneyExport } from "@/lib/exportJourney";
 import { ContentEditor } from "./content-editor";
 
 // Map React Flow node type name -> our custom component.
@@ -1462,6 +1462,7 @@ function BuilderInner() {
   );
 
   return (
+    <VariableSourceProvider nodes={variableSourceNodes}>
     <div className="relative flex flex-col h-screen w-screen bg-slate-50 font-sans text-slate-800">
       {/* Full-width top header + toolbar (moved above the workspace) */}
       {/* Main header row */}
