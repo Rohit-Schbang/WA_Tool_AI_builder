@@ -12,6 +12,74 @@ function slugify(name: string): string {
   return s || "journey";
 }
 
+// Metadata we record about an exported journey, alongside the flow itself, so
+// the file is self-describing (which bot, when, from where, how big) instead of
+// a bare nodes/edges blob.
+export interface JourneyExportMeta {
+  chatbotId?: string;
+  name?: string;
+  isActive?: boolean;
+  createdAt?: string | null;
+  // "builder" = current canvas (may include unsaved edits); "draft" = the saved
+  // draft fetched from the server (dashboard export).
+  source: "builder" | "draft";
+  // The live published version number, when known.
+  liveVersion?: number | null;
+}
+
+// The envelope written to disk: metadata + the raw flow definition. `kind` and
+// `exportVersion` let an importer recognise and migrate the format later.
+export interface JourneyExport {
+  kind: "wa-ai-tool/journey-export";
+  exportVersion: 1;
+  exportedAt: string;
+  chatbot: {
+    id?: string;
+    name?: string;
+    isActive?: boolean;
+    createdAt?: string | null;
+  };
+  source: "builder" | "draft";
+  liveVersion?: number | null;
+  stats: {
+    nodes: number;
+    edges: number;
+    variables: number;
+    apiConfigs: number;
+  };
+  definition: any;
+}
+
+// Count the meaningful parts of a flow definition for the export's stats block.
+function countStats(definition: any): JourneyExport["stats"] {
+  const len = (v: any) => (Array.isArray(v) ? v.length : 0);
+  return {
+    nodes: len(definition?.nodes),
+    edges: len(definition?.edges),
+    variables: len(definition?.variables),
+    apiConfigs: len(definition?.apiConfigs),
+  };
+}
+
+// Wrap a raw flow definition in the self-describing export envelope.
+export function wrapJourneyExport(definition: any, meta: JourneyExportMeta): JourneyExport {
+  return {
+    kind: "wa-ai-tool/journey-export",
+    exportVersion: 1,
+    exportedAt: new Date().toISOString(),
+    chatbot: {
+      id: meta.chatbotId,
+      name: meta.name,
+      isActive: meta.isActive,
+      createdAt: meta.createdAt ?? null,
+    },
+    source: meta.source,
+    liveVersion: meta.liveVersion ?? null,
+    stats: countStats(definition),
+    definition,
+  };
+}
+
 // Trigger a browser download of `data` serialized as pretty JSON.
 export function downloadJson(data: unknown, filename: string): void {
   const json = JSON.stringify(data, null, 2);

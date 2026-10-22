@@ -18,6 +18,7 @@ interface Entry {
 
 const ACTION_LABEL: Record<string, string> = {
   "chatbot.create": "Created the bot",
+  "chatbot.import": "Imported the bot from a JSON file",
   "chatbot.rename": "Renamed the bot",
   "chatbot.activate": "Activated the bot",
   "chatbot.deactivate": "Deactivated the bot",

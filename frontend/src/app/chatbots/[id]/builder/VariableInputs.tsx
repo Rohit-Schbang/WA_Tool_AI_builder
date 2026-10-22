@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { VariablePanel } from "./VariablePanel";
 
 // A declared workflow variable (kept loose here to avoid a circular import).
 export interface WorkflowVariable {
@@ -48,8 +49,6 @@ export function VariableTextInput({
   const toolbarRef = useRef<HTMLDivElement>(null);
   const [showVars, setShowVars] = useState(false);
   const [showEmoji, setShowEmoji] = useState(false);
-  const [newName, setNewName] = useState("");
-  const [newType, setNewType] = useState<WorkflowVariable["type"]>("text");
 
   // Close the variable / emoji popovers when clicking anywhere outside the toolbar.
   useEffect(() => {
@@ -109,15 +108,6 @@ export function VariableTextInput({
     setShowVars(false);
   }
 
-  function createAndInsert() {
-    // Strip braces from the name; we insert the {{ }} form ourselves.
-    const name = newName.trim().replace(/[{}]/g, "").trim();
-    if (!name) return;
-    onCreateVariable(name, newType);
-    insertVariable(name);
-    setNewName("");
-    setNewType("text");
-  }
 
   return (
     <div className="border border-base-300 rounded-lg overflow-visible">
@@ -143,7 +133,7 @@ export function VariableTextInput({
       )}
 
       {/* Toolbar */}
-      <div className="relative flex items-center gap-1 border-t border-base-200 px-1 py-1 bg-base-200/40">
+      <div ref={toolbarRef} className="relative flex items-center gap-1 border-t border-base-200 px-1 py-1 bg-base-200/40">
         {!hideFormatting && (
           <>
             <button type="button" title="Bold" onClick={() => wrapSelection("*")} className="btn btn-ghost btn-xs font-bold">B</button>
@@ -186,46 +176,14 @@ export function VariableTextInput({
           + Add variable
         </button>
         {showVars && (
-          <div className="absolute bottom-8 right-0 z-30 bg-base-100 border border-base-300 rounded shadow w-56 max-h-64 overflow-y-auto">
-            {/* Search box: filters the list AND becomes the new-variable name. */}
-            <div className="p-2 border-b border-base-200 sticky top-0 bg-base-100">
-              <input
-                autoFocus
-                className="input input-bordered input-xs w-full"
-                placeholder="Search or new variable…"
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") createAndInsert(); if (e.key === "Escape") setShowVars(false); }}
-              />
-            </div>
-            {(() => {
-              const qv = newName.trim().toLowerCase();
-              const list = qv ? variables.filter((v) => v.name.toLowerCase().includes(qv)) : variables;
-              return list.length > 0 ? (
-                list.map((v) => (
-                  <button key={v.name} type="button" onClick={() => insertVariable(v.name)} className="w-full text-left px-3 py-1.5 hover:bg-base-200 text-sm font-mono">
-                    {`{{${v.name}}}`}
-                    <span className="text-base-content/40 ml-2 font-sans text-xs">{v.type === "text" ? "string" : v.type}</span>
-                  </button>
-                ))
-              ) : (
-                <div className="px-3 py-2 text-xs text-base-content/50">{qv ? "No match — create below." : "No variables yet."}</div>
-              );
-            })()}
-            <div className="border-t border-base-200 p-2 flex flex-col gap-1">
-              <div className="flex gap-1">
-                <select
-                  className="select select-bordered select-xs flex-1"
-                  value={newType}
-                  onChange={(e) => setNewType(e.target.value as WorkflowVariable["type"])}
-                >
-                  <option value="text">string</option>
-                  <option value="number">number</option>
-                  <option value="boolean">boolean</option>
-                </select>
-                <button type="button" onClick={createAndInsert} disabled={!newName.trim()} className="btn btn-xs btn-primary">Create</button>
-              </div>
-            </div>
+          <div className="absolute bottom-9 right-0 z-30 w-80 max-w-[calc(100vw-2rem)]">
+            <VariablePanel
+              variables={variables}
+              mode="insert"
+              onPick={insertVariable}
+              onCreate={(name, type) => onCreateVariable(name, type)}
+              onClose={() => setShowVars(false)}
+            />
           </div>
         )}
       </div>
@@ -346,9 +304,10 @@ export function ChoiceBehaviour({
 
   return (
     <div className="flex flex-col gap-4 border-t border-slate-200 pt-3 mt-1 text-xs">
-      {/* Save selection to a variable */}
+      {/* Save selection to a variable (required) — the chosen option is always
+          stored so later steps can use it. */}
       <div className="space-y-1.5">
-        <span className="block font-semibold text-slate-700">Save selection to variable <span className="text-slate-400 font-normal">(optional)</span></span>
+        <span className="block font-semibold text-slate-700">Save selection to variable <span className="text-rose-500 font-normal">*</span></span>
         <VariableSelect
           value={cfg.answerVariable ?? ""}
           onChange={(v) => updateConfig("answerVariable", v)}
@@ -356,7 +315,7 @@ export function ChoiceBehaviour({
           onCreateVariable={onCreateVariable}
           placeholder="Store the chosen option"
         />
-        {cfg.answerVariable && (
+        {cfg.answerVariable ? (
           <div className="flex items-center gap-2 pt-0.5">
             <span className="text-[11px] text-slate-500">Store the</span>
             <select
@@ -368,20 +327,25 @@ export function ChoiceBehaviour({
               <option value="id">option id (stable key)</option>
             </select>
           </div>
+        ) : (
+          <p className="text-[11px] text-rose-500">Pick or create a variable — the chosen option is always saved here.</p>
         )}
       </div>
 
-      {/* Irrelevant / unmatched reply */}
+      {/* Irrelevant / unmatched reply — when the user types something that
+          isn't one of the options. The invalid reply isn't stored anywhere; a
+          hidden counter drives the re-asks and is cleared on a valid pick. */}
       <div className="space-y-1.5">
         <span className="block font-semibold text-slate-700">If the reply matches no option</span>
-        <VariableTextInput
+        <label className="block text-[11px] text-slate-500">
+          Message to send back (then re-show the options)
+        </label>
+        <input
+          type="text"
+          className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 bg-white text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
           value={inv.message ?? ""}
-          onChange={(v) => setInv({ message: v })}
-          variables={variables}
-          onCreateVariable={onCreateVariable}
-          singleLine
-          hideFormatting
-          placeholder="Please pick one of the options below."
+          onChange={(e) => setInv({ message: e.target.value })}
+          placeholder="e.g. Please pick one of the options below."
         />
         <div className="flex items-center gap-2">
           <span className="text-[11px] text-slate-500">Re-ask up to</span>
@@ -389,7 +353,7 @@ export function ChoiceBehaviour({
             type="number"
             min={1}
             max={5}
-            className="w-16 px-2 py-1 rounded border border-slate-300 text-xs"
+            className="w-16 px-2 py-1 rounded border border-slate-300 bg-white text-slate-800 text-xs focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
             value={inv.maxRetries ?? 3}
             onChange={(e) => setInv({ maxRetries: Math.max(1, Math.min(5, Number(e.target.value) || 1)) })}
           />
@@ -411,7 +375,7 @@ export function ChoiceBehaviour({
       <label className="flex items-start gap-2 cursor-pointer">
         <input
           type="checkbox"
-          className="mt-0.5"
+          className="mt-0.5 w-4 h-4 rounded border-slate-300 bg-white text-teal-600 accent-teal-600 focus:ring-teal-500"
           checked={!!cfg.lockAfterAnswer}
           onChange={(e) => updateConfig("lockAfterAnswer", e.target.checked)}
         />
@@ -445,11 +409,7 @@ export function VariableSelect({
   allowCreate?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState("");
-  const [newType, setNewType] = useState<WorkflowVariable["type"]>("text");
-  const [active, setActive] = useState(0); // highlighted row for keyboard nav
   const wrapRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
 
   // Close on outside click.
   useEffect(() => {
@@ -461,101 +421,43 @@ export function VariableSelect({
     return () => document.removeEventListener("mousedown", onDown);
   }, [open]);
 
-  const q = query.trim().toLowerCase();
-  const filtered = q ? variables.filter((v) => v.name.toLowerCase().includes(q)) : variables;
-  // Offer "create" only when the typed name is new and valid.
-  const typedName = query.trim().replace(/[{}]/g, "").trim();
-  const canCreate = allowCreate && !!typedName && !variables.some((v) => v.name.toLowerCase() === typedName.toLowerCase());
-  const rows = [
-    ...filtered.map((v) => ({ kind: "var" as const, name: v.name, type: v.type })),
-    ...(canCreate ? [{ kind: "create" as const, name: typedName, type: newType }] : []),
-  ];
-
-  const choose = (name: string) => { onChange(name); setQuery(""); setOpen(false); };
-  const create = () => {
-    if (!typedName) return;
-    onCreateVariable(typedName, newType);
-    choose(typedName);
-    setNewType("text");
-  };
-  const pick = (i: number) => {
-    const r = rows[i];
-    if (!r) return;
-    r.kind === "create" ? create() : choose(r.name);
-  };
-
-  const typeLabel = (t: string) => (t === "text" ? "string" : t);
-
   return (
     <div className="relative flex flex-col gap-1" ref={wrapRef}>
-      <div
-        className="flex items-center gap-1.5 h-9 px-2.5 rounded-lg border border-slate-300 bg-white text-xs text-slate-700 cursor-text focus-within:border-teal-500 focus-within:ring-1 focus-within:ring-teal-500"
-        onClick={() => { setOpen(true); inputRef.current?.focus(); }}
-      >
-        <i className="ph-bold ph-magnifying-glass text-slate-400 text-[11px]" aria-hidden="true" />
-        <input
-          ref={inputRef}
-          className="flex-1 bg-transparent outline-none placeholder:text-slate-400"
-          placeholder={value || placeholder}
-          value={open ? query : value ? "" : ""}
-          onFocus={() => setOpen(true)}
-          onChange={(e) => { setQuery(e.target.value); setActive(0); setOpen(true); }}
-          onKeyDown={(e) => {
-            if (e.key === "ArrowDown") { e.preventDefault(); setActive((a) => Math.min(a + 1, rows.length - 1)); }
-            else if (e.key === "ArrowUp") { e.preventDefault(); setActive((a) => Math.max(a - 1, 0)); }
-            else if (e.key === "Enter") { e.preventDefault(); pick(active); }
-            else if (e.key === "Escape") { setOpen(false); setQuery(""); }
-          }}
-        />
-        {value && !open && (
-          <span className="font-mono text-slate-800 truncate max-w-[55%]" title={value}>{value}</span>
-        )}
+      {/* Trigger — shows the chosen variable; opens the accordion panel. */}
+      <div className="flex items-center gap-1.5 h-9 px-2.5 rounded-lg border border-slate-300 bg-white text-xs text-slate-700 focus-within:border-teal-500 focus-within:ring-1 focus-within:ring-teal-500">
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          className="flex-1 min-w-0 flex items-center gap-1.5 text-left outline-none"
+        >
+          <i className="ph-bold ph-brackets-curly text-teal-600 text-[11px]" aria-hidden="true" />
+          {value ? (
+            <span className="font-mono text-slate-800 truncate" title={value}>{value}</span>
+          ) : (
+            <span className="text-slate-400 truncate">{placeholder}</span>
+          )}
+        </button>
         {value && (
-          <button type="button" onClick={(e) => { e.stopPropagation(); onChange(""); setQuery(""); }} className="text-slate-400 hover:text-rose-600" title="Clear" aria-label="Clear variable">
+          <button type="button" onClick={() => onChange("")} className="text-slate-400 hover:text-rose-600" title="Clear" aria-label="Clear variable">
             <i className="ph-bold ph-x text-[10px]" />
           </button>
         )}
-        <i className="ph-bold ph-caret-down text-slate-400 text-[9px]" aria-hidden="true" />
+        <i className={`ph-bold ph-caret-down text-slate-400 text-[9px] transition-transform ${open ? "rotate-180" : ""}`} aria-hidden="true" />
       </div>
 
       {open && (
-        <div className="absolute z-40 top-full mt-1 left-0 right-0 bg-white border border-slate-200 rounded-lg shadow-lg max-h-60 overflow-y-auto py-1">
-          {rows.length === 0 && (
-            <div className="px-3 py-2 text-[11px] text-slate-400">No variables{q ? " match" : " yet"}.</div>
-          )}
-          {rows.map((r, i) =>
-            r.kind === "var" ? (
-              <button
-                key={`v-${r.name}`}
-                type="button"
-                onMouseEnter={() => setActive(i)}
-                onClick={() => choose(r.name)}
-                className={`w-full text-left px-3 py-1.5 text-xs flex items-center justify-between ${i === active ? "bg-teal-50" : "hover:bg-slate-50"}`}
-              >
-                <span className="font-mono text-slate-800">{r.name}</span>
-                <span className="text-slate-400 text-[10px] ml-2">{typeLabel(r.type)}</span>
-              </button>
-            ) : (
-              <div key="create" className={`px-3 py-1.5 ${i === active ? "bg-teal-50" : ""}`} onMouseEnter={() => setActive(i)}>
-                <div className="flex items-center gap-1.5">
-                  <button type="button" onClick={create} className="flex-1 text-left text-xs font-semibold text-teal-700 flex items-center gap-1">
-                    <i className="ph-bold ph-plus text-[10px]" /> Create “{r.name}”
-                  </button>
-                  <select
-                    className="text-[11px] rounded border border-slate-200 bg-white px-1 py-0.5 text-slate-600"
-                    value={newType}
-                    onChange={(e) => setNewType(e.target.value as WorkflowVariable["type"])}
-                    onClick={(e) => e.stopPropagation()}
-                    title="New variable type"
-                  >
-                    <option value="text">string</option>
-                    <option value="number">number</option>
-                    <option value="boolean">boolean</option>
-                  </select>
-                </div>
-              </div>
-            )
-          )}
+        <div className="absolute z-40 top-full mt-1 left-0 right-0 min-w-[18rem]">
+          <VariablePanel
+            variables={variables}
+            mode="store"
+            selected={value}
+            allowCreate={allowCreate}
+            onPick={(name) => { onChange(name); setOpen(false); }}
+            onCreate={(name, type) => onCreateVariable(name, type)}
+            onClose={() => setOpen(false)}
+          />
         </div>
       )}
     </div>

@@ -8,6 +8,13 @@ import { runEngine, RunResult } from "../runtime/engine.js";
 import { MessagingAdapter, WorkflowDefinition, ExecutionContext, WorkflowNode, InboundType, InboundMedia } from "../runtime/types.js";
 import { LoggingAdapter } from "../messaging/loggingAdapters.js";
 import { storeInboundMedia } from "../messaging/mediaStore.js";
+import { ensureContactForWaUser, syncContactFromCustomerVars } from "../contacts/service.js";
+import { seedCustomerVars, contactPatchFromVars, CUSTOMER_NAME } from "../runtime/customerVars.js";
+
+// The web tester talks to the engine as "web-test" or "web-test-<session>"
+// (see testPanel.tsx startOver). Those aren't real WhatsApp numbers, so we never
+// create or sync a Contact for them.
+const isTestUser = (waUserId: string) => waUserId === "web-test" || waUserId.startsWith("web-test-");
 
 // #2 — build the initial variables map from the workflow's declared variables
 // and their default values. Coerces to the declared type.
@@ -61,7 +68,9 @@ export async function handleInboundMessage(
     // node can expect a specific input type (image/audio/document/…). It's
     // optional: callers that only have text (e.g. the web tester) omit it and
     // the message is treated as plain text, exactly as before.
-    opts: { bypassTrigger?: boolean; useDraft?: boolean; inbound?: { type: InboundType; media?: InboundMedia | null } } = {}
+    // `profileName` is the WhatsApp display name from the webhook (if any); used
+    // to name a freshly auto-created Contact. Omitted by the web tester.
+    opts: { bypassTrigger?: boolean; useDraft?: boolean; profileName?: string | null; inbound?: { type: InboundType; media?: InboundMedia | null } } = {}
 ): Promise<{ status: string }> {
 
 
@@ -117,6 +126,25 @@ export async function handleInboundMessage(
                 variables: seeded
             }
         })
+
+        // A real WhatsApp user has started a journey -> make sure they appear in
+        // Contacts (global, deduped by phone). Best-effort: never block or fail
+        // the conversation if this doesn't work. Skips the web tester.
+        if (!isTestUser(waUserId)) {
+            try {
+                const contact = await ensureContactForWaUser(chatbot.ownerId, waUserId, opts.profileName);
+                // Seed customer_name from the best known source (contact name or
+                // the profile name) so the journey can greet/use it immediately.
+                const seededVars = conversation.variables as Record<string, any>;
+                seedCustomerVars(seededVars, { phone: waUserId, name: contact?.name ?? opts.profileName });
+                conversation = await prisma.conversation.update({
+                    where: { id: conversation.id },
+                    data: { variables: seededVars },
+                });
+            } catch (err) {
+                console.error("Auto-create contact failed:", err);
+            }
+        }
     }
 
     // A finished (or failed) journey restarts when the user sends the trigger
@@ -142,11 +170,20 @@ export async function handleInboundMessage(
        // 3. Build the execution context from saved state.
     const variables = (conversation.variables as Record<string, any>) ?? {};
 
+    // Reserved customer variables are always available: phone is the identity
+    // (authoritative), name is filled from the profile name when not already
+    // set by the journey. Applies to every run (new or resumed).
+    seedCustomerVars(variables, { phone: waUserId, name: opts.profileName });
+
     // The user replied, so clear any no-reply fallback "fired" flags — if the
     // flow waits again at any node later, its fallback should be eligible anew.
     for (const key of Object.keys(variables)) {
         if (key.startsWith("__fallbackFired_")) delete variables[key];
     }
+
+    // Remember the name we START with, so we only write back to the Contact
+    // when the journey actually changed it during this run.
+    const nameBeforeRun = variables[CUSTOMER_NAME];
 
     // Wrap the messaging adapter so every outbound message is logged.
     const loggingMessaging = new LoggingAdapter(messaging, conversation.id);
@@ -239,6 +276,21 @@ export async function handleInboundMessage(
             lastMessageAt: new Date(),
         },
     });
+
+    // 6b. Sync the Contact from the customer variables — e.g. the journey
+    // captured a fuller name ("Rohit") than Meta's profile ("R"). Debounced to a
+    // single update per run and only when the name actually changed. Best-effort
+    // and skipped for the web tester.
+    if (!isTestUser(waUserId) && context.variables[CUSTOMER_NAME] !== nameBeforeRun) {
+        const patch = contactPatchFromVars(context.variables);
+        if (patch) {
+            try {
+                await syncContactFromCustomerVars(waUserId, patch);
+            } catch (err) {
+                console.error("Contact sync from customer vars failed:", err);
+            }
+        }
+    }
 
     // Finish the Execution record.
     await prisma.execution.update({

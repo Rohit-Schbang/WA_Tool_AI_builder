@@ -116,6 +116,12 @@ webhookRouter.post("/webhook", verifyWebhookSignature, async (req: Request, res:
     const from = message.from; // sender's WhatsApp id
     if (!phoneNumberId || !from) return;
 
+    // The sender's WhatsApp display name (used to name an auto-created Contact).
+    // Meta puts it under value.contacts[].profile.name; match it to the sender.
+    const profileName: string | undefined =
+      (value?.contacts ?? []).find((c: any) => c?.wa_id === from)?.profile?.name
+      ?? value?.contacts?.[0]?.profile?.name;
+
     // Parse the message into a text string + typed inbound descriptor so a
     // Question node can expect media (image/audio/document/video/location) and
     // not just text. Unsupported/unknown types still flow through as "unknown".
@@ -131,8 +137,9 @@ webhookRouter.post("/webhook", verifyWebhookSignature, async (req: Request, res:
     // Build the WhatsApp adapter from the stored (backend-only) credentials.
     const messaging = new WhatsAppAdapter(phoneNumberId, connection.accessToken);
 
-    // Run the workflow for this message, passing the typed inbound payload.
-    await handleInboundMessage(connection.chatbotId, from, text, messaging, { inbound });
+    // Run the workflow for this message, passing the typed inbound payload and
+    // the sender's profile name (so a new Contact gets a readable name).
+    await handleInboundMessage(connection.chatbotId, from, text, messaging, { inbound, profileName });
   } catch (err) {
     console.error("Webhook processing error:", err);
   }

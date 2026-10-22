@@ -2,8 +2,10 @@
 import { Request, Response, Router } from "express";
 import { requireAuth } from "../auth/middleware.js";
 import z from "zod";
-import { createChatbot, deleteChatBot, getChatbot, listChatbots, renameChatBot, setChatbotActivate } from "./service.js";
+import { createChatbot, createChatbotWithDraft, deleteChatBot, getChatbot, listChatbots, renameChatBot, setChatbotActivate } from "./service.js";
 import { logActivity } from "../activity/service.js";
+import { parseImport } from "../workflows/importer.js";
+import type { Prisma } from "@prisma/client";
 
 export const chatbotsRouter = Router();
 
@@ -30,6 +32,28 @@ chatbotsRouter.post("/", async (req: Request, res: Response) => {
   const bot = await createChatbot(req.userId!, parsed.data.name)
   logActivity(req, "chatbot.create", { chatbotId: bot.id, details: { name: bot.name } })
   return res.status(200).json(bot)
+})
+
+//  POST --->  Import a journey JSON as a NEW chatbot (draft only, never published)
+const importSchema = z.object({
+  name: z.string().trim().max(100).optional(),
+  data: z.unknown(),
+})
+
+chatbotsRouter.post("/import", async (req: Request, res: Response) => {
+  const parsed = importSchema.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: "Invalid input", errors: ["The request is missing the file contents."] })
+
+  const result = parseImport(parsed.data.data)
+  if (!result.ok) return res.status(422).json({ error: "This file can't be imported.", errors: result.errors })
+
+  const name = (parsed.data.name || result.suggestedName || "Imported journey").trim().slice(0, 100) || "Imported journey"
+  const bot = await createChatbotWithDraft(req.userId!, name, result.definition as unknown as Prisma.InputJsonValue)
+  logActivity(req, "chatbot.import", {
+    chatbotId: bot.id,
+    details: { name: bot.name, nodes: result.definition.nodes.length, warnings: result.warnings.length },
+  })
+  return res.status(200).json({ bot, warnings: result.warnings, stats: { nodes: result.definition.nodes.length, edges: result.definition.edges.length } })
 })
 
 // GET ---> List of all chatbots (global workspace)

@@ -61,10 +61,13 @@ function relativeTime(iso: string | null): string {
 export function ConnectionHealth({
   chatbotId,
   onHealth,
+  refreshKey = 0,
 }: {
   chatbotId: string;
   // Called with each fresh result so the page's status badges stay in sync.
   onHealth?: (h: Health) => void;
+  // Bump this to re-check right away (e.g. after credentials are saved).
+  refreshKey?: number;
 }) {
   const [health, setHealth] = useState<Health | null>(null);
   const [loading, setLoading] = useState(true);
@@ -99,6 +102,16 @@ export function ConnectionHealth({
     timer.current = setInterval(() => load(), POLL_MS);
     return () => { if (timer.current) clearInterval(timer.current); };
   }, [load]);
+
+  // Re-check as soon as the parent says the connection changed, and restart
+  // the poll timer so the next automatic check is a full interval away.
+  const firstKey = useRef(refreshKey);
+  useEffect(() => {
+    if (refreshKey === firstKey.current) return; // mount is handled above
+    load(true);
+    if (timer.current) clearInterval(timer.current);
+    timer.current = setInterval(() => load(), POLL_MS);
+  }, [refreshKey, load]);
 
   const q = qualityStyle(health?.qualityRating ?? null);
   const hasCredentials = !!health?.phoneNumberId || !!health?.connected;

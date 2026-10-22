@@ -125,6 +125,13 @@ export default function SettingsPage() {
   }, []);
 
   const [botName, setBotName] = useState("");
+  // Bumped whenever the connection changes so Number Health re-checks at once.
+  const [healthKey, setHealthKey] = useState(0);
+  const refreshAll = useCallback(() => {
+    loadConnection();
+    setHealthKey((k) => k + 1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (!getToken()) {
@@ -177,7 +184,7 @@ export default function SettingsPage() {
       setAccessToken("");
       setAppSecret("");
       setVerifyToken("");
-      loadConnection();
+      refreshAll();
     } catch (err: any) {
       const data = err.response?.data;
       if (data?.field) setFieldErrors({ [data.field]: data.error } as any);
@@ -285,10 +292,10 @@ export default function SettingsPage() {
             )}
 
             {/* Primary flow — one-click "Connect to Meta" (auto-provisions credentials) */}
-            <EmbeddedSignup chatbotId={chatbotId} connected={connected} onConnected={loadConnection} />
+            <EmbeddedSignup chatbotId={chatbotId} connected={connected} onConnected={refreshAll} />
 
             {/* Live number health dashboard (always shown; explains its state) */}
-            <ConnectionHealth chatbotId={chatbotId} onHealth={onHealth} />
+            <ConnectionHealth chatbotId={chatbotId} onHealth={onHealth} refreshKey={healthKey} />
 
             {/* Advanced setup — collapsible manual credential entry (fallback). */}
             <div>

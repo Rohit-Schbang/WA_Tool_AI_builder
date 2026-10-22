@@ -22,6 +22,7 @@ import { WorkFlowNode } from "./workflow.Node";
 import { DeletableEdge } from "./DeletableEdge";
 import { TestPanel } from "./testPanel";
 import { VariableTextInput, VariableSelect, NoReplyFallback, ChoiceBehaviour } from "./VariableInputs";
+import { VariableSourceProvider } from "./VariablePanel";
 import { layoutGraph } from "./autoLayout";
 import { ensureSingleStart } from "./startNode";
 import { EditableBotName } from "@/app/components/EditableBotName";
@@ -682,10 +683,18 @@ function BuilderInner() {
 
   // ---------------------- EXPORT ----------------------
   // Download the current canvas (nodes, edges, variables, API configs) as a
-  // JSON file — the exact shape persisted as the draft / published version.
+  // JSON file, wrapped in a self-describing envelope (bot name/id, export time,
+  // live version, counts) — not just the bare flow definition.
   function handleExportJson() {
     const definition = buildDefinition();
-    downloadJson(definition, journeyFileName(botName || "journey"));
+    const data = wrapJourneyExport(definition, {
+      chatbotId,
+      name: botName,
+      isActive,
+      source: "builder",
+      liveVersion: versionsInfo?.liveVersion ?? null,
+    });
+    downloadJson(data, journeyFileName(botName || "journey"));
   }
 
   // ---------------------- ACTIVATE ----------------------
@@ -1444,6 +1453,13 @@ function BuilderInner() {
     }));
     return { nodes: flowNodes, edges: flowEdges };
   }, [preview]);
+
+  // The flow's nodes in the shape the variable panel groups by (Questions,
+  // Choices, REST API, Data & AI…). Recomputed only when nodes change.
+  const variableSourceNodes = useMemo(
+    () => nodes.map((n) => ({ id: n.id, nodeType: n.data.nodeType, seq: n.data.seq, config: n.data.config ?? {} })),
+    [nodes]
+  );
 
   return (
     <div className="relative flex flex-col h-screen w-screen bg-slate-50 font-sans text-slate-800">
@@ -2484,7 +2500,7 @@ function BuilderInner() {
                 <label className="flex items-start gap-2 cursor-pointer border-t border-slate-200 pt-3">
                   <input
                     type="checkbox"
-                    className="mt-0.5"
+                    className="mt-0.5 w-4 h-4 rounded border-slate-300 bg-white text-teal-600 accent-teal-600 focus:ring-teal-500"
                     checked={!!selectedNode.data.config.lockAfterAnswer}
                     onChange={(e) => updateConfig("lockAfterAnswer", e.target.checked)}
                   />
@@ -4134,6 +4150,7 @@ function BuilderInner() {
         </div>
       )}
     </div>
+    </VariableSourceProvider>
   );
 }
 
