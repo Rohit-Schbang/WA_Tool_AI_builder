@@ -80,3 +80,23 @@ export async function ensureContactForWaUser(
         return prisma.contact.findUnique({ where: { phone: trimmedPhone } });
     }
 }
+
+// Sync the Contact record from a journey's customer variables (e.g. the user
+// gave their full name "Rohit" after Meta only provided "R"). Updates the
+// Contact's name when it actually differs, so the contact list stays current.
+// Idempotent and best-effort: does nothing when the contact doesn't exist or
+// the name is unchanged. Returns true if a row was updated.
+export async function syncContactFromCustomerVars(
+    phone: string,
+    patch: { name?: string }
+): Promise<boolean> {
+    const trimmedPhone = String(phone ?? "").trim();
+    const newName = String(patch.name ?? "").trim();
+    if (!trimmedPhone || !newName) return false;
+
+    const existing = await prisma.contact.findUnique({ where: { phone: trimmedPhone } });
+    if (!existing || existing.name === newName) return false;
+
+    await prisma.contact.update({ where: { phone: trimmedPhone }, data: { name: newName } });
+    return true;
+}
