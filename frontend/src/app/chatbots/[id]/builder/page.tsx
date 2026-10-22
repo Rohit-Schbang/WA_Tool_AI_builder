@@ -33,7 +33,8 @@ import { dialog } from "@/app/components/Dialog";
 import { useAutoSave, readLocalDraft, clearLocalDraft } from "./useAutoSave";
 import { AiJourneyPanel } from "./AiJourneyPanel";
 import { WA_LIMITS } from "@/lib/waLimits";
-import { downloadJson, journeyFileName, wrapJourneyExport } from "@/lib/exportJourney";
+import { downloadJson, journeyFileName } from "@/lib/exportJourney";
+import { ContentEditor } from "./content-editor";
 
 // Map React Flow node type name -> our custom component.
 const nodeTypes = { workflow: WorkFlowNode };
@@ -337,6 +338,8 @@ function BuilderInner() {
   const [loadingBot, setLoadingBot] = useState(true);
   const [showReports, setShowReports] = useState(false);
   const [reportCount, setReportCount] = useState(0);
+  // Content Mode overlay: shows the WhatsApp content editor on top of the canvas.
+  const [showContentEditor, setShowContentEditor] = useState(false);
   // An AI build is running (the canvas shows a loader until it's applied).
   const [aiBuilding, setAiBuilding] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -1459,8 +1462,7 @@ function BuilderInner() {
   );
 
   return (
-    <VariableSourceProvider nodes={variableSourceNodes}>
-    <div className="flex flex-col h-screen w-screen bg-slate-50 font-sans text-slate-800">
+    <div className="relative flex flex-col h-screen w-screen bg-slate-50 font-sans text-slate-800">
       {/* Full-width top header + toolbar (moved above the workspace) */}
       {/* Main header row */}
       <header className="h-14 bg-white border-b border-slate-200 px-4 flex items-center justify-between shrink-0 z-30">
@@ -1558,6 +1560,28 @@ function BuilderInner() {
               : "All changes saved"
             }</span>
           </span>
+
+          {/* Mode toggle — mirrors the one in the Content Editor so the two
+              screens share a single mapped control. Builder = Developer Mode. */}
+          <div
+            className="inline-flex p-0.5 rounded-lg bg-slate-100 border border-slate-200 text-xs font-medium"
+            title="Switch between editing the flow logic and the message content"
+          >
+            <button
+              onClick={() => setShowContentEditor(false)}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-brand-600 text-white shadow-sm font-semibold transition"
+            >
+              <i className="ph-bold ph-code text-xs" />
+              <span>Developer Mode</span>
+            </button>
+            <button
+              onClick={() => setShowContentEditor(true)}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-slate-600 hover:text-slate-900 transition"
+            >
+              <i className="ph-bold ph-pencil-simple-line text-xs" />
+              <span>Content Mode</span>
+            </button>
+          </div>
 
           <button
             onClick={handleSave}
@@ -4116,6 +4140,13 @@ function BuilderInner() {
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Content Mode overlay — WhatsApp content editor on top of the canvas. */}
+      {showContentEditor && (
+        <div className="absolute inset-0 z-50 bg-slate-50">
+          <ContentEditor botName={botName || "Bot AI Check"} onClose={() => setShowContentEditor(false)} />
         </div>
       )}
     </div>
