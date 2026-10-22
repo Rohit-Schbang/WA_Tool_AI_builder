@@ -6,6 +6,7 @@ import { prisma } from "../../infra/prisma.js";
 
 export type ActivityAction =
   | "chatbot.create"
+  | "chatbot.import"
   | "chatbot.rename"
   | "chatbot.activate"
   | "chatbot.deactivate"

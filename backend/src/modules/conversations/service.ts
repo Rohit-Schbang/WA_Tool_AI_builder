@@ -11,9 +11,10 @@ import { storeInboundMedia } from "../messaging/mediaStore.js";
 import { ensureContactForWaUser, syncContactFromCustomerVars } from "../contacts/service.js";
 import { seedCustomerVars, contactPatchFromVars, CUSTOMER_NAME } from "../runtime/customerVars.js";
 
-// The web tester talks to the engine as this fixed user id; it is not a real
-// WhatsApp number, so we never create a Contact for it.
-const TEST_WA_USER_ID = "web-test";
+// The web tester talks to the engine as "web-test" or "web-test-<session>"
+// (see testPanel.tsx startOver). Those aren't real WhatsApp numbers, so we never
+// create or sync a Contact for them.
+const isTestUser = (waUserId: string) => waUserId === "web-test" || waUserId.startsWith("web-test-");
 
 // #2 — build the initial variables map from the workflow's declared variables
 // and their default values. Coerces to the declared type.
@@ -129,7 +130,7 @@ export async function handleInboundMessage(
         // A real WhatsApp user has started a journey -> make sure they appear in
         // Contacts (global, deduped by phone). Best-effort: never block or fail
         // the conversation if this doesn't work. Skips the web tester.
-        if (waUserId !== TEST_WA_USER_ID) {
+        if (!isTestUser(waUserId)) {
             try {
                 const contact = await ensureContactForWaUser(chatbot.ownerId, waUserId, opts.profileName);
                 // Seed customer_name from the best known source (contact name or
@@ -280,7 +281,7 @@ export async function handleInboundMessage(
     // captured a fuller name ("Rohit") than Meta's profile ("R"). Debounced to a
     // single update per run and only when the name actually changed. Best-effort
     // and skipped for the web tester.
-    if (waUserId !== TEST_WA_USER_ID && context.variables[CUSTOMER_NAME] !== nameBeforeRun) {
+    if (!isTestUser(waUserId) && context.variables[CUSTOMER_NAME] !== nameBeforeRun) {
         const patch = contactPatchFromVars(context.variables);
         if (patch) {
             try {
