@@ -9,6 +9,7 @@ import { Sidebar } from "@/app/components/Sidebar";
 import { EditableBotName } from "@/app/components/EditableBotName";
 import { dialog } from "@/app/components/Dialog";
 import { downloadJson, journeyFileName, wrapJourneyExport } from "@/lib/exportJourney";
+import { ImportJourneyDialog } from "./ImportJourneyDialog";
 
 
 
@@ -39,6 +40,9 @@ export default function ChatbotsPage() {
 
     // Id of the bot currently being exported (shows a spinner on its button).
     const [exportingId, setExportingId] = useState<string | null>(null)
+
+    // Import-from-JSON dialog.
+    const [showImport, setShowImport] = useState(false)
 
     // ------------------->>> Getting all BOTS
 
@@ -231,6 +235,15 @@ export default function ChatbotsPage() {
                                     >
                                         <span>{isCreating ? "Creating..." : "Create Flow"}</span>
                                         <span className="material-symbols-outlined text-[18px]">arrow_forward</span>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowImport(true)}
+                                        className="h-11 px-4 rounded-xl bg-surface-container-high hover:bg-surface-container text-on-surface font-label-lg text-label-lg font-semibold inline-flex items-center gap-1.5 active:scale-[0.99] transition-all whitespace-nowrap"
+                                        title="Create a chatbot from a journey JSON file"
+                                    >
+                                        <span className="material-symbols-outlined text-[18px]">upload_file</span>
+                                        <span>Import</span>
                                     </button>
                                 </form>
                             </div>
@@ -431,6 +444,12 @@ export default function ChatbotsPage() {
                     </div>
                 </main>
             </div>
+
+            <ImportJourneyDialog
+                open={showImport}
+                onClose={() => setShowImport(false)}
+                onImported={(botId) => { setShowImport(false); router.push(`/chatbots/${botId}/builder`) }}
+            />
         </div>
     );
 }

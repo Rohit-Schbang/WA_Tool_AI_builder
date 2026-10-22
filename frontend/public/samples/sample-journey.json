@@ -1,0 +1,277 @@
+{
+  "kind": "wa-ai-tool/journey-export",
+  "exportVersion": 1,
+  "exportedAt": "2026-10-22T00:00:00.000Z",
+  "about": {
+    "description": "Sample journey for a salon: book an appointment, see prices, or ask a question. It uses every block type available in the builder, so you can copy the structure of any block.",
+    "howItWorks": [
+      "Each node has an 'id', a 'nodeType' and a 'config'. 'position' (canvas x/y) and 'seq' are optional.",
+      "Each edge connects 'source' to 'target'. 'sourceHandle' is null for a plain connection, the button/row id for a choice, or 'true' / 'else' for If/Else and API Request.",
+      "Variables you reference as {{name}} are declared in 'variables'. customer_name and customer_phone are built in and don't need declaring.",
+      "API Request nodes refer to an entry in 'apiConfigs' by name, and to one of its endpoints by id.",
+      "The 'about' section is ignored on import. You can also import a bare definition ({ variables, apiConfigs, nodes, edges }) without this envelope."
+    ]
+  },
+  "chatbot": { "name": "Glow Studio – Appointment Booking" },
+  "source": "sample",
+  "stats": { "nodes": 17, "edges": 22, "variables": 9, "apiConfigs": 1 },
+  "definition": {
+    "version": 1,
+    "variables": [
+      { "name": "main_choice", "type": "text", "default": "" },
+      { "name": "user_question", "type": "text", "default": "" },
+      { "name": "ai_reply", "type": "text", "default": "" },
+      { "name": "service", "type": "text", "default": "" },
+      { "name": "preferred_date", "type": "text", "default": "" },
+      { "name": "booking_ref", "type": "text", "default": "" },
+      { "name": "is_available", "type": "boolean", "default": "false" },
+      { "name": "slots_status", "type": "number", "default": "0" },
+      { "name": "booking_status", "type": "text", "default": "pending" }
+    ],
+    "apiConfigs": [
+      {
+        "name": "Glow Studio API",
+        "baseUrl": "https://api.example.com/v1",
+        "headers": [{ "key": "Authorization", "value": "Bearer YOUR_API_KEY" }],
+        "endpoints": [
+          { "id": "ep_slots", "name": "Check availability", "method": "GET", "path": "/slots" },
+          {
+            "id": "ep_book",
+            "name": "Create booking",
+            "method": "POST",
+            "path": "/bookings",
+            "body": "{\"name\":\"{{customer_name}}\",\"phone\":\"{{customer_phone}}\",\"service\":\"{{service}}\",\"date\":\"{{preferred_date}}\",\"reference\":\"{{booking_ref}}\"}"
+          }
+        ]
+      }
+    ],
+    "nodes": [
+      {
+        "id": "start",
+        "nodeType": "START",
+        "seq": 0,
+        "position": { "x": 700, "y": 0 },
+        "config": { "name": "Start", "keywords": ["hi", "hello", "book"], "matchType": "contains" }
+      },
+      {
+        "id": "welcome",
+        "nodeType": "SEND_MESSAGE",
+        "seq": 1,
+        "position": { "x": 700, "y": 150 },
+        "config": {
+          "name": "Welcome menu",
+          "text": "👋 Hi {{customer_name}}, welcome to Glow Studio!\n\nWhat would you like to do today?",
+          "footer": "Glow Studio · Hair & Spa",
+          "buttons": [
+            { "id": "btn_book", "label": "Book appointment", "kind": "cta" },
+            { "id": "btn_prices", "label": "See prices", "kind": "cta" },
+            { "id": "btn_ask", "label": "Ask a question", "kind": "cta" }
+          ],
+          "answerVariable": "main_choice",
+          "answerValue": "label",
+          "invalidReply": { "message": "Please tap one of the buttons below 👇", "maxRetries": 2, "goToNodeId": "end_thanks" }
+        }
+      },
+      {
+        "id": "ask_name",
+        "nodeType": "ASK_INPUT",
+        "seq": 1,
+        "position": { "x": 350, "y": 330 },
+        "config": {
+          "name": "Ask name",
+          "text": "Great choice! What name should we book under?",
+          "footer": "This also updates your contact details.",
+          "variable": "customer_name",
+          "expectedType": "text",
+          "validationType": "none"
+        }
+      },
+      {
+        "id": "prices",
+        "nodeType": "SEND_MESSAGE",
+        "seq": 2,
+        "position": { "x": 700, "y": 330 },
+        "config": {
+          "name": "Price list",
+          "text": "💇 Haircuts start at ₹499 and spa treatments at ₹1,299. Tap below for the full menu.",
+          "buttons": [
+            { "id": "btn_menu", "label": "Open price list", "kind": "url", "url": "https://example.com/glow-studio/prices" }
+          ]
+        }
+      },
+      {
+        "id": "ask_question",
+        "nodeType": "ASK_INPUT",
+        "seq": 3,
+        "position": { "x": 1050, "y": 330 },
+        "config": {
+          "name": "Ask the question",
+          "text": "Sure! Type your question and our assistant will answer right away.",
+          "variable": "user_question",
+          "expectedType": "text",
+          "validationType": "none"
+        }
+      },
+      {
+        "id": "choose_service",
+        "nodeType": "LIST",
+        "seq": 1,
+        "position": { "x": 350, "y": 500 },
+        "config": {
+          "name": "Choose service",
+          "text": "Thanks, {{customer_name}}! Which service would you like?",
+          "buttonText": "View services",
+          "rows": [
+            { "id": "row_hair", "label": "Haircut & styling" },
+            { "id": "row_colour", "label": "Hair colour" },
+            { "id": "row_spa", "label": "Spa & facial" }
+          ],
+          "answerVariable": "service",
+          "answerValue": "label",
+          "invalidReply": { "message": "Please pick a service from the list.", "maxRetries": 3 },
+          "fallback": { "enabled": true, "minutes": 10, "message": "Still there? Pick a service whenever you're ready." }
+        }
+      },
+      {
+        "id": "ai_answer",
+        "nodeType": "AI_RESPONSE",
+        "seq": 1,
+        "position": { "x": 1050, "y": 500 },
+        "config": {
+          "name": "AI answer",
+          "prompt": "You are the friendly receptionist of Glow Studio, a hair and spa salon open 10am–8pm, Tuesday to Sunday. Answer the customer's question in 2–3 short sentences. If you don't know the answer, say a team member will call them.\n\nCustomer name: {{customer_name}}\nQuestion: {{user_question}}",
+          "variable": "ai_reply",
+          "sendReply": true,
+          "fallbackText": "Thanks for asking! A team member will get back to you shortly."
+        }
+      },
+      {
+        "id": "ask_date",
+        "nodeType": "ASK_INPUT",
+        "seq": 2,
+        "position": { "x": 350, "y": 700 },
+        "config": {
+          "name": "Ask date",
+          "text": "Which date suits you? Please reply as DD-MM-YYYY (e.g. 25-12-2026).",
+          "variable": "preferred_date",
+          "expectedType": "text",
+          "validationType": "custom",
+          "regex": "^\\d{2}-\\d{2}-\\d{4}$",
+          "retryLimit": 3,
+          "failureMessage": "That doesn't look like a date. Please use DD-MM-YYYY, e.g. 25-12-2026."
+        }
+      },
+      {
+        "id": "make_ref",
+        "nodeType": "TRANSFORM",
+        "seq": 1,
+        "position": { "x": 350, "y": 860 },
+        "config": {
+          "name": "Create booking reference",
+          "expression": "\"GS-\" + String(vars.customer_phone).slice(-4) + \"-\" + String(vars.preferred_date).split(\"-\").join(\"\")",
+          "variable": "booking_ref"
+        }
+      },
+      {
+        "id": "check_slots",
+        "nodeType": "API_REQUEST",
+        "seq": 1,
+        "position": { "x": 350, "y": 1020 },
+        "config": {
+          "name": "Check availability",
+          "apiConfig": "Glow Studio API",
+          "endpointId": "ep_slots",
+          "query": [
+            { "key": "date", "value": "{{preferred_date}}" },
+            { "key": "service", "value": "{{service}}" }
+          ],
+          "responseMap": [{ "path": "data.available", "variable": "is_available" }],
+          "statusVariable": "slots_status",
+          "timeoutMs": 10000
+        }
+      },
+      {
+        "id": "slot_free",
+        "nodeType": "CONDITION",
+        "seq": 1,
+        "position": { "x": 200, "y": 1200 },
+        "config": { "name": "Slot available?", "field": "is_available", "operator": "equals", "value": "true" }
+      },
+      {
+        "id": "api_error",
+        "nodeType": "SEND_MESSAGE",
+        "seq": 5,
+        "position": { "x": 560, "y": 1200 },
+        "config": {
+          "name": "Couldn't check",
+          "text": "We couldn't check availability just now. Our team will call you on {{customer_phone}} to confirm your {{service}} booking."
+        }
+      },
+      {
+        "id": "set_status",
+        "nodeType": "SET_VARIABLE",
+        "seq": 1,
+        "position": { "x": 40, "y": 1380 },
+        "config": { "name": "Mark as confirmed", "variable": "booking_status", "value": "confirmed" }
+      },
+      {
+        "id": "slot_taken",
+        "nodeType": "SEND_MESSAGE",
+        "seq": 4,
+        "position": { "x": 360, "y": 1380 },
+        "config": {
+          "name": "Date unavailable",
+          "text": "Sorry {{customer_name}}, we're fully booked on {{preferred_date}}. Let's try another date."
+        }
+      },
+      {
+        "id": "confirm",
+        "nodeType": "SEND_MESSAGE",
+        "seq": 3,
+        "position": { "x": 40, "y": 1540 },
+        "config": {
+          "name": "Booking confirmed",
+          "text": "✅ You're booked, {{customer_name}}!\n\n*Service:* {{service}}\n*Date:* {{preferred_date}}\n*Reference:* {{booking_ref}}\n\nWe'll send you a reminder before your visit."
+        }
+      },
+      {
+        "id": "pause",
+        "nodeType": "WAIT",
+        "seq": 1,
+        "position": { "x": 40, "y": 1700 },
+        "config": { "name": "Short pause", "seconds": 3 }
+      },
+      {
+        "id": "end_thanks",
+        "nodeType": "END",
+        "seq": 1,
+        "position": { "x": 700, "y": 1880 },
+        "config": { "name": "Thank you", "text": "Thanks for choosing Glow Studio 💜 Send *Hi* anytime to start again." }
+      }
+    ],
+    "edges": [
+      { "id": "e1", "source": "start", "target": "welcome", "sourceHandle": null },
+      { "id": "e2", "source": "welcome", "target": "ask_name", "sourceHandle": "btn_book" },
+      { "id": "e3", "source": "welcome", "target": "prices", "sourceHandle": "btn_prices" },
+      { "id": "e4", "source": "welcome", "target": "ask_question", "sourceHandle": "btn_ask" },
+      { "id": "e5", "source": "prices", "target": "end_thanks", "sourceHandle": null },
+      { "id": "e6", "source": "ask_question", "target": "ai_answer", "sourceHandle": null },
+      { "id": "e7", "source": "ai_answer", "target": "end_thanks", "sourceHandle": null },
+      { "id": "e8", "source": "ask_name", "target": "choose_service", "sourceHandle": null },
+      { "id": "e9", "source": "choose_service", "target": "ask_date", "sourceHandle": "row_hair" },
+      { "id": "e10", "source": "choose_service", "target": "ask_date", "sourceHandle": "row_colour" },
+      { "id": "e11", "source": "choose_service", "target": "ask_date", "sourceHandle": "row_spa" },
+      { "id": "e12", "source": "ask_date", "target": "make_ref", "sourceHandle": null },
+      { "id": "e13", "source": "make_ref", "target": "check_slots", "sourceHandle": null },
+      { "id": "e14", "source": "check_slots", "target": "slot_free", "sourceHandle": "true" },
+      { "id": "e15", "source": "check_slots", "target": "api_error", "sourceHandle": "else" },
+      { "id": "e16", "source": "slot_free", "target": "set_status", "sourceHandle": "true" },
+      { "id": "e17", "source": "slot_free", "target": "slot_taken", "sourceHandle": "else" },
+      { "id": "e18", "source": "set_status", "target": "confirm", "sourceHandle": null },
+      { "id": "e19", "source": "confirm", "target": "pause", "sourceHandle": null },
+      { "id": "e20", "source": "pause", "target": "end_thanks", "sourceHandle": null },
+      { "id": "e21", "source": "slot_taken", "target": "ask_date", "sourceHandle": null },
+      { "id": "e22", "source": "api_error", "target": "end_thanks", "sourceHandle": null }
+    ]
+  }
+}
