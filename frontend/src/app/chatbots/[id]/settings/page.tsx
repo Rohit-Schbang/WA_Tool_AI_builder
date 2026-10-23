@@ -105,8 +105,14 @@ export default function SettingsPage() {
       setAppSecret("");
       setVerifyToken("");
     } catch (err: any) {
+      const data = err.response?.data;
+      // The journey itself no longer exists (deleted, e.g. in another tab).
+      if (err.response?.status === 404 && (data?.code === "CHATBOT_NOT_FOUND" || data?.error === "Chatbot not found")) {
+        setExisting(null);
+        setLoadError("This chatbot has been deleted. Go back to the chatbots list.");
+      }
       // 404 = no connection configured yet. That's fine; show empty form.
-      if (err.response?.status === 404) setExisting(null);
+      else if (err.response?.status === 404) setExisting(null);
       else setLoadError("Couldn't load the WhatsApp connection. The server may be waking up — try again.");
     } finally {
       setLoading(false);
