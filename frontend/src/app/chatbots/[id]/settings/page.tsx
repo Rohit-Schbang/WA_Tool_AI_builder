@@ -188,10 +188,14 @@ export default function SettingsPage() {
     } catch (err: any) {
       const data = err.response?.data;
       if (data?.field) setFieldErrors({ [data.field]: data.error } as any);
-      // 422 = Meta rejected the new credentials; the old connection is untouched.
+      // 422 = Meta rejected the new credentials; 409 = this journey's trigger
+      // keywords clash with a journey already on that number. Either way the
+      // old connection is untouched.
       setMessage(
         err.response?.status === 422
           ? `Not saved: ${data?.error ?? "Meta rejected these credentials"}. Your previous connection is unchanged.`
+          : data?.code === "KEYWORD_CONFLICT"
+          ? `Not saved: ${data.error} Change this journey's keywords in the builder (Start block), then connect again.`
           : data?.error ?? "Failed to save"
       );
     } finally {

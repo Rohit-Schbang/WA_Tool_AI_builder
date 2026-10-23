@@ -4,6 +4,8 @@ import { WhatsAppAdapter } from "../../messaging/adapters.js";
 import { handleInboundMessage } from "../../conversations/service.js";
 import type { InboundType, InboundMedia } from "../../runtime/types.js";
 import { verifyWebhookSignature } from "./security.js";
+import { pickInboundConnection } from "./routing.js";
+import { triggerOf } from "../../triggers/keywords.js";
 
 export const webhookRouter = Router();
 
@@ -127,19 +129,60 @@ webhookRouter.post("/webhook", verifyWebhookSignature, async (req: Request, res:
     // not just text. Unsupported/unknown types still flow through as "unknown".
     const { text, inbound } = parseInbound(message);
 
-    // Find the chatbot connection for this phone number id.
-    const connection = await prisma.connection.findFirst({
+    // Several journeys can share one WhatsApp number; each has its own trigger
+    // keyword. Route by keyword / ongoing conversation (see routing.ts).
+    const connections = await prisma.connection.findMany({
       where: { phoneNumberId },
+      include: { chatbot: { select: { name: true, isActive: true, activeVersionId: true, updatedAt: true } } },
     });
+    const liveConns = connections.filter((c) => c.chatbot.isActive && c.chatbot.activeVersionId);
 
-    if (!connection || !connection.accessToken) return;
+    // Trigger of each live journey = START node of its PUBLISHED version.
+    const liveVersions = liveConns.length > 1
+      ? await prisma.workflowVersion.findMany({
+          where: { id: { in: liveConns.map((c) => c.chatbot.activeVersionId!) } },
+          select: { id: true, definition: true },
+        })
+      : [];
+    const triggerByVersion = new Map(liveVersions.map((v) => [v.id, triggerOf(v.definition)]));
+    const candidates = connections.map((c) => ({
+      ...c,
+      trigger: c.chatbot.activeVersionId ? triggerByVersion.get(c.chatbot.activeVersionId) : undefined,
+    }));
+
+    const ongoing = liveConns.length > 1
+      ? await prisma.conversation.findMany({
+          where: { waUserId: from, chatbotId: { in: liveConns.map((c) => c.chatbotId) }, status: { in: ["ACTIVE", "WAITING_FOR_INPUT"] } },
+          orderBy: { updatedAt: "desc" },
+          select: { chatbotId: true },
+        })
+      : [];
+    const route = pickInboundConnection(candidates, ongoing.map((c) => c.chatbotId), text);
+    if (!route.pick) {
+      console.warn(`[webhook] message for phone number ${phoneNumberId} not handled: ${route.reason}`);
+      return;
+    }
+    if (route.liveCount > 1) {
+      console.log(`[webhook] ${route.liveCount} live journeys on ${phoneNumberId}; routed to "${route.pick.chatbot.name}" (${route.reason})`);
+    }
+    const connection = route.pick;
+    if (!connection.accessToken) return;
+
+    // Switching journeys: close the user's open conversation in the other
+    // journey(s) on this number, so only one journey talks to them at a time.
+    if (route.closeChatbotIds.length) {
+      await prisma.conversation.updateMany({
+        where: { waUserId: from, chatbotId: { in: route.closeChatbotIds }, status: { in: ["ACTIVE", "WAITING_FOR_INPUT"] } },
+        data: { status: "COMPLETED", currentNodeId: null },
+      });
+    }
 
     // Build the WhatsApp adapter from the stored (backend-only) credentials.
     const messaging = new WhatsAppAdapter(phoneNumberId, connection.accessToken);
 
     // Run the workflow for this message, passing the typed inbound payload and
     // the sender's profile name (so a new Contact gets a readable name).
-    await handleInboundMessage(connection.chatbotId, from, text, messaging, { inbound, profileName });
+    await handleInboundMessage(connection.chatbotId, from, text, messaging, { inbound, profileName, forceRestart: route.restart });
   } catch (err) {
     console.error("Webhook processing error:", err);
   }

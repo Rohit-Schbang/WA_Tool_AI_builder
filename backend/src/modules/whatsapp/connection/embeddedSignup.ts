@@ -1,5 +1,6 @@
 import { config } from "../../../infra/config.js";
 import { getConnection, upsertConnection } from "./service.js";
+import { guardKeywords } from "../../triggers/guard.js";
 import { prisma } from "../../../infra/prisma.js";
 import type { Connection } from "@prisma/client";
 
@@ -258,6 +259,11 @@ export async function completeEmbeddedSignup(
     );
   }
 
+  // Fail fast — before any Meta calls — if this journey's trigger keywords
+  // clash with a journey already on that number (throws KeywordConflictError).
+  // It's checked again under the lock when the connection is saved below.
+  await guardKeywords(chatbotId, { phoneNumberId: input.phoneNumberId }, async () => true);
+
   const accessToken = await exchangeCodeForToken(input.code);
 
   // These are best-effort reads (cosmetic) + required side-effects.
@@ -270,8 +276,9 @@ export async function completeEmbeddedSignup(
   await registerPhoneNumber(input.phoneNumberId, accessToken);
   const owner = await getTokenOwner(accessToken);
 
-  // Persist. accessToken here is the BISU token used to send messages.
-  return upsertConnection(chatbotId, {
+  // Persist. accessToken here is the BISU token used to send messages. Saved
+  // under the per-number keyword lock so a clash can't appear meanwhile.
+  const { result } = await guardKeywords(chatbotId, { phoneNumberId: input.phoneNumberId }, () => upsertConnection(chatbotId, {
     accessToken,
     wabaId: input.wabaId,
     phoneNumberId: input.phoneNumberId,
@@ -282,7 +289,8 @@ export async function completeEmbeddedSignup(
     appId: config.META_APP_ID,
     appSecret: config.META_APP_SECRET,
     status: "CONNECTED",
-  });
+  }));
+  return result;
 }
 
 // ---------------------------------------------------------------------------

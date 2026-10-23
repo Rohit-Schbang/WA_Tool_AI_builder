@@ -22,6 +22,13 @@ import { generateJourney, planOnly, makeEditContext, DIAGRAM_LIMITS } from "./ge
 import { logActivity } from "../activity/service.js";
 import { ensureSingleStart } from "./startNode.js";
 import { reportsRouter, saveReport } from "./reports.js";
+import { checkKeywords, guardKeywords, KeywordConflictError } from "../triggers/guard.js";
+import { ANY_MESSAGE, normalizeKeyword } from "../triggers/keywords.js";
+
+// 409 body for a trigger-keyword clash (the UI shows the conflict dialog).
+function keywordConflict(res: Response, err: KeywordConflictError) {
+  return res.status(409).json({ error: err.message, code: "KEYWORD_CONFLICT", conflicts: err.conflicts });
+}
 
 export const workflowsRouter = Router({ mergeParams: true });
 
@@ -67,9 +74,37 @@ workflowsRouter.put("/draft", async (req: Request, res: Response) => {
   // Guarantee exactly one START node so a corrupted/edited client copy can
   // never persist a flow without an entry point.
   const definition = ensureSingleStart(parsed.data.definition);
-  const saved = await saveDraft(chatbotId, definition as Prisma.InputJsonValue);
-  logActivity(req, "workflow.save", { chatbotId, version: 0, details: { nodes: definition.nodes.length } });
-  return res.json(saved);
+  try {
+    // Trigger keywords must stay unique per phone number (checked under a
+    // per-number lock, so concurrent saves can't both claim a keyword).
+    const { result: saved, warnings } = await guardKeywords(
+      chatbotId,
+      { draft: definition },
+      () => saveDraft(chatbotId, definition as Prisma.InputJsonValue)
+    );
+    logActivity(req, "workflow.save", { chatbotId, version: 0, details: { nodes: definition.nodes.length } });
+    return res.json({ ...saved, keywordWarnings: warnings });
+  } catch (err) {
+    if (err instanceof KeywordConflictError) return keywordConflict(res, err);
+    throw err;
+  }
+});
+
+// POST ---------->>>>          api/chatbots/:chatbotId/workflow/keyword-check
+// Read-only: would these trigger keywords (or "any message", when empty) clash
+// with another journey on this journey's phone number? Used live by the editor.
+const keywordCheckSchema = z.object({ keywords: z.array(z.string().max(512)).max(200) });
+
+workflowsRouter.post("/keyword-check", async (req: Request, res: Response) => {
+  const chatbotId = req.params.chatbotId;
+  const bot = await getChatbot(chatbotId);
+  if (!bot) return res.status(404).json({ error: "Chatbot not found" });
+  const parsed = keywordCheckSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "Invalid input" });
+
+  const keys = [...new Set(parsed.data.keywords.map(normalizeKeyword).filter(Boolean))];
+  const result = await checkKeywords(chatbotId, keys.length ? keys : [ANY_MESSAGE]);
+  return res.json(result);
 });
 
 // POST ---------->>>>          api/chatbots/:chatbotId/workflow/publish
@@ -128,7 +163,17 @@ workflowsRouter.post("/versions/:version/activate", async (req: Request, res: Re
   const bot = await getChatbot(chatbotId);
   if (!bot) return res.status(404).json({ error: "Chatbot not found" });
 
-  const row = await activateVersion(chatbotId, Number(req.params.version));
+  const target = await getPublishedVersion(chatbotId, Number(req.params.version));
+  if (!target) return res.status(404).json({ error: "Version not found" });
+
+  // An older version may use keywords another journey on this number now owns.
+  let row;
+  try {
+    ({ result: row } = await guardKeywords(chatbotId, { live: target.definition }, () => activateVersion(chatbotId, target.version)));
+  } catch (err) {
+    if (err instanceof KeywordConflictError) return keywordConflict(res, err);
+    throw err;
+  }
   if (!row) return res.status(404).json({ error: "Version not found" });
 
   logActivity(req, "workflow.activate_version", { chatbotId, version: row.version });
@@ -142,7 +187,17 @@ workflowsRouter.post("/versions/:version/restore", async (req: Request, res: Res
   const bot = await getChatbot(chatbotId);
   if (!bot) return res.status(404).json({ error: "Chatbot not found" });
 
-  const draft = await restoreVersionToDraft(chatbotId, Number(req.params.version));
+  const source = await getPublishedVersion(chatbotId, Number(req.params.version));
+  if (!source) return res.status(404).json({ error: "Version not found" });
+
+  // The restored draft may bring back keywords another journey now owns.
+  let draft;
+  try {
+    ({ result: draft } = await guardKeywords(chatbotId, { draft: source.definition }, () => restoreVersionToDraft(chatbotId, source.version)));
+  } catch (err) {
+    if (err instanceof KeywordConflictError) return keywordConflict(res, err);
+    throw err;
+  }
   if (!draft) return res.status(404).json({ error: "Version not found" });
 
   logActivity(req, "workflow.restore_version", { chatbotId, version: Number(req.params.version) });

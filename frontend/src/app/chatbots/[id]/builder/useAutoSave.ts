@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
+import type { KeywordConflict } from "@/lib/keywords";
 
 // #11 — Auto-save.
 //   - localStorage: written immediately (debounced) on every change, so an
@@ -48,6 +49,10 @@ export function useAutoSave(
 ) {
   const [status, setStatus] = useState<SyncStatus>("idle");
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
+  // The server rejected the last sync because a trigger keyword clashes with
+  // another journey on this number. Not retried until the flow changes.
+  const [conflict, setConflict] = useState<KeywordConflict[] | null>(null);
+  const rejectedJson = useRef<string>("");
 
   // Snapshot (stringified) of what's currently persisted in the DB, so we can
   // detect real changes and skip no-op syncs.
@@ -79,9 +84,16 @@ export function useAutoSave(
       lastSyncedJson.current = json;
       setLastSyncedAt(Date.now());
       clearLocalDraft(chatbotId); // synced — local backup no longer needed
+      setConflict(null);
       setStatus("synced");
       return true;
-    } catch {
+    } catch (err: any) {
+      // Keyword clash: retrying the same flow would fail again, so remember it
+      // and surface it; the local draft is kept, nothing is lost.
+      if (err?.response?.status === 409 && err.response.data?.code === "KEYWORD_CONFLICT") {
+        rejectedJson.current = json;
+        setConflict(err.response.data.conflicts ?? []);
+      }
       setStatus("error"); // keep local draft; will retry next tick
       return false;
     }
@@ -112,7 +124,8 @@ export function useAutoSave(
     if (!ready) return;
     const t = setInterval(() => {
       const json = JSON.stringify(getDefinition());
-      if (json !== lastSyncedJson.current) syncNow();
+      // Skip a flow the server already rejected for a keyword clash.
+      if (json !== lastSyncedJson.current && json !== rejectedJson.current) syncNow();
     }, SYNC_INTERVAL_MS);
     return () => clearInterval(t);
   }, [ready, getDefinition, syncNow]);
@@ -136,5 +149,5 @@ export function useAutoSave(
     return () => window.removeEventListener("beforeunload", handler);
   }, [ready, chatbotId, getDefinition]);
 
-  return { status, lastSyncedAt, touch, syncNow, primeBaseline };
+  return { status, lastSyncedAt, touch, syncNow, primeBaseline, conflict };
 }

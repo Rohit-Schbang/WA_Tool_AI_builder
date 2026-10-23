@@ -34,7 +34,9 @@ import { useAutoSave, readLocalDraft, clearLocalDraft } from "./useAutoSave";
 import { AiJourneyPanel } from "./AiJourneyPanel";
 import { WA_LIMITS } from "@/lib/waLimits";
 import { downloadJson, journeyFileName, wrapJourneyExport } from "@/lib/exportJourney";
-import { ContentEditor } from "./content-editor";
+import { ContentMode } from "./ContentMode";
+import { KeywordConflictDialog } from "./KeywordConflictDialog";
+import { normalizeKeyword, type KeywordConflict } from "@/lib/keywords";
 
 // Map React Flow node type name -> our custom component.
 const nodeTypes = { workflow: WorkFlowNode };
@@ -338,8 +340,8 @@ function BuilderInner() {
   const [loadingBot, setLoadingBot] = useState(true);
   const [showReports, setShowReports] = useState(false);
   const [reportCount, setReportCount] = useState(0);
-  // Content Mode overlay: shows the WhatsApp content editor on top of the canvas.
-  const [showContentEditor, setShowContentEditor] = useState(false);
+  // Content Mode: edit the journey's messages directly instead of the canvas.
+  const [contentMode, setContentMode] = useState(false);
   // An AI build is running (the canvas shows a loader until it's applied).
   const [aiBuilding, setAiBuilding] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -348,6 +350,23 @@ function BuilderInner() {
 
   // Draft text for the START node's "Trigger keywords" chip input.
   const [keywordDraft, setKeywordDraft] = useState("");
+  // Trigger keyword already used by another journey on this phone number.
+  const [keywordConflict, setKeywordConflict] = useState<
+    { keyword: string; conflicts: KeywordConflict[]; phoneNumber?: string | null } | null
+  >(null);
+  const [keywordChecking, setKeywordChecking] = useState(false);
+  // Clashes this journey's CURRENT keywords already have (shown on the Start block).
+  const [startClashes, setStartClashes] = useState<KeywordConflict[]>([]);
+
+  // Show a clash from a rejected save (409 KEYWORD_CONFLICT) in the dialog.
+  // Returns true if the error was a keyword clash.
+  const showKeywordConflictFrom = useCallback((err: any): boolean => {
+    const data = err?.response?.data;
+    if (err?.response?.status !== 409 || data?.code !== "KEYWORD_CONFLICT") return false;
+    const conflicts: KeywordConflict[] = data.conflicts ?? [];
+    setKeywordConflict({ keyword: conflicts.find((c) => !c.catchAll)?.keyword ?? "", conflicts });
+    return true;
+  }, []);
 
   // Index of the Send Message button currently being dragged (for reordering).
   const [dragBtnIdx, setDragBtnIdx] = useState<number | null>(null);
@@ -414,6 +433,21 @@ function BuilderInner() {
 
   const params = useParams();
   const chatbotId = params.id as string;
+
+  // Ask the server whether these keywords (empty = "any message") clash with
+  // another journey on this journey's phone number. null = check failed (the
+  // server still validates on save).
+  const checkKeywordClash = useCallback(async (keywords: string[]) => {
+    setKeywordChecking(true);
+    try {
+      const res = await api.post(`/api/chatbots/${chatbotId}/workflow/keyword-check`, { keywords });
+      return res.data as { conflicts: KeywordConflict[]; phoneNumber: string | null };
+    } catch {
+      return null;
+    } finally {
+      setKeywordChecking(false);
+    }
+  }, [chatbotId]);
 
   // React Flow instance — lets us pan/zoom to a node (#4, #6, #14).
   const rfRef = useRef<ReactFlowInstance | null>(null);
@@ -633,8 +667,10 @@ function BuilderInner() {
       // prevents a stale "restore unsaved changes" prompt on the next load.
       clearLocalDraft(chatbotId);
       setSavedMsg("Saved");
+      return true;
     } catch (error) {
-      setSavedMsg("Save Failed");
+      setSavedMsg(showKeywordConflictFrom(error) ? "Not saved: trigger keyword already in use" : "Save Failed");
+      return false;
     } finally {
       setSaving(false);
     }
@@ -645,7 +681,13 @@ function BuilderInner() {
     setPublishing(true);
     setPublishMsg("");
     setPublishErrors([]);
-    await handleSave();
+    // Never publish if the draft couldn't be saved (e.g. a keyword clash) —
+    // that would publish the previous draft instead of what's on screen.
+    if (!(await handleSave())) {
+      setPublishing(false);
+      setPublishMsg("Fix the issues to publish");
+      return;
+    }
     try {
       const response = await api.post(`/api/chatbots/${chatbotId}/workflow/publish`, {});
       setPublishMsg(`Published v${response.data.version}`);
@@ -794,9 +836,13 @@ function BuilderInner() {
         await loadVersions(true);
       }
       setVersionConfirm(null);
-    } catch {
+    } catch (err: any) {
+      // A keyword clash explains itself in the dialog.
+      if (showKeywordConflictFrom(err)) setVersionConfirm(null);
       setVersionError(
-        action === "activate" ? "Couldn't make that version live." : "Couldn't restore that version."
+        err?.response?.data?.code === "KEYWORD_CONFLICT"
+          ? `v${version} uses a trigger keyword another journey on this number now owns.`
+          : action === "activate" ? "Couldn't make that version live." : "Couldn't restore that version."
       );
     } finally {
       setVersionBusy(false);
@@ -866,6 +912,19 @@ function BuilderInner() {
 
   const selectedNode = nodes.find((n) => n.id === selectedId);
 
+  // When the Start block is open, show clashes its CURRENT keywords already
+  // have (e.g. ones created before keyword checks existed).
+  const startKeywordsKey =
+    selectedNode?.data.nodeType === "START" ? JSON.stringify(selectedNode.data.config?.keywords ?? []) : null;
+  useEffect(() => {
+    if (startKeywordsKey === null) { setStartClashes([]); return; }
+    let cancelled = false;
+    api.post(`/api/chatbots/${chatbotId}/workflow/keyword-check`, { keywords: JSON.parse(startKeywordsKey) })
+      .then((res) => { if (!cancelled) setStartClashes(res.data?.conflicts ?? []); })
+      .catch(() => { if (!cancelled) setStartClashes([]); });
+    return () => { cancelled = true; };
+  }, [startKeywordsKey, chatbotId]);
+
   // Update one field inside the selected node's config.
   function updateConfig(key: string, value: any) {
     setNodes((nds) =>
@@ -875,6 +934,30 @@ function BuilderInner() {
           : n
       )
     );
+  }
+
+  // Content Mode edits: merge a patch into ANY node's config (same data the
+  // canvas edits, so autosave / publish pick it up unchanged).
+  const updateNodeConfig = useCallback((nodeId: string, patch: Record<string, any>) => {
+    setNodes((nds) =>
+      nds.map((n) =>
+        n.id === nodeId ? { ...n, data: { ...n.data, config: { ...n.data.config, ...patch } } } : n
+      )
+    );
+  }, [setNodes]);
+
+  // Switch editor mode. Leaving Developer Mode closes the side panel.
+  function switchMode(content: boolean) {
+    if (content && preview) return;
+    if (content) setSelectedId(null);
+    setContentMode(content);
+  }
+
+  // "Open in Developer Mode": back to the canvas, focused on that block. The
+  // canvas re-mounts on switch, so focus after it has rendered.
+  function openInDeveloper(nodeId: string) {
+    setContentMode(false);
+    setTimeout(() => focusNode(nodeId), 150);
   }
 
   // Update a nested object field (e.g. config.header.type, config.cta.url).
@@ -1562,26 +1645,36 @@ function BuilderInner() {
             }</span>
           </span>
 
-          {/* Mode toggle — mirrors the one in the Content Editor so the two
-              screens share a single mapped control. Builder = Developer Mode. */}
+          {/* Mode toggle — Developer Mode (flow canvas) / Content Mode (edit
+              the journey's messages directly). Both edit the same draft. */}
           <div
+            role="group"
+            aria-label="Editor mode"
             className="inline-flex p-0.5 rounded-lg bg-slate-100 border border-slate-200 text-xs font-medium"
             title="Switch between editing the flow logic and the message content"
           >
-            <button
-              onClick={() => setShowContentEditor(false)}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-brand-600 text-white shadow-sm font-semibold transition"
-            >
-              <i className="ph-bold ph-code text-xs" />
-              <span>Developer Mode</span>
-            </button>
-            <button
-              onClick={() => setShowContentEditor(true)}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-slate-600 hover:text-slate-900 transition"
-            >
-              <i className="ph-bold ph-pencil-simple-line text-xs" />
-              <span>Content Mode</span>
-            </button>
+            {([
+              { content: false, icon: "ph-code", label: "Developer Mode" },
+              { content: true, icon: "ph-pencil-simple-line", label: "Content Mode" },
+            ] as const).map((m) => {
+              const active = contentMode === m.content;
+              return (
+                <button
+                  key={m.label}
+                  type="button"
+                  aria-pressed={active}
+                  disabled={m.content && !!preview}
+                  title={m.content && preview ? "Exit the version preview to edit content" : undefined}
+                  onClick={() => switchMode(m.content)}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md transition disabled:opacity-40 disabled:cursor-not-allowed ${
+                    active ? "bg-brand-600 text-white shadow-sm font-semibold" : "text-slate-600 hover:text-slate-900"
+                  }`}
+                >
+                  <i className={`ph-bold ${m.icon} text-xs`} />
+                  <span>{m.label}</span>
+                </button>
+              );
+            })}
           </div>
 
           <button
@@ -1635,7 +1728,8 @@ function BuilderInner() {
         </div>
       </header>
 
-      {/* Secondary toolbar */}
+      {/* Secondary toolbar (canvas tools — Developer Mode only) */}
+      {!contentMode && (
       <div className="h-11 bg-white/95 backdrop-blur-md border-b border-slate-200/80 px-4 flex items-center justify-between z-20 shrink-0 text-xs">
         <div className="flex items-center space-x-3">
           <div className="flex items-center bg-slate-100/80 p-0.5 rounded-lg border border-slate-200/70">
@@ -1714,6 +1808,7 @@ function BuilderInner() {
           </span>
         </div>
       </div>
+      )}
 
       {/* Publish errors */}
       {publishErrors.length > 0 && (
@@ -1739,7 +1834,21 @@ function BuilderInner() {
         </div>
       )}
 
+      {/* Content Mode — edit this journey's messages directly */}
+      {contentMode && (
+        <ContentMode
+          nodes={nodes as any}
+          edges={edges as any}
+          variables={variables}
+          onCreateVariable={ensureVariable}
+          onUpdate={updateNodeConfig}
+          onOpenInDeveloper={openInDeveloper}
+          botName={botName}
+        />
+      )}
+
       {/* Workspace row: palette | canvas | config panel */}
+      {!contentMode && (
       <div className="flex flex-1 min-h-0 overflow-hidden">
       {/* Palette — Nodes Library */}
       <aside className="w-64 shrink-0 bg-white border-r border-slate-200 flex flex-col z-20 shadow-sm">
@@ -3247,20 +3356,43 @@ function BuilderInner() {
 
             {selectedNode.data.nodeType === "START" && (() => {
               const keywords: string[] = selectedNode.data.config.keywords ?? [];
-              const matchType = selectedNode.data.config.matchType ?? "contains";
+              // The never-implemented "regex" option now behaves as "contains".
+              const matchType = ["exact", "starts_with"].includes(selectedNode.data.config.matchType)
+                ? selectedNode.data.config.matchType
+                : "contains";
 
-              const addKeyword = (raw: string) => {
+              // Each new keyword is checked against the other journeys on this
+              // journey's WhatsApp number before it's added (the server checks
+              // again on save, under a lock, so this can't be bypassed).
+              const addKeyword = async (raw: string) => {
                 const cleaned = raw.trim().replace(/,$/, "").trim();
-                if (!cleaned || keywords.includes(cleaned)) {
+                const norm = normalizeKeyword(cleaned);
+                if (!norm || keywords.some((k) => normalizeKeyword(k) === norm)) {
                   setKeywordDraft("");
                   return;
+                }
+                const res = await checkKeywordClash([cleaned]);
+                if (res?.conflicts.length) {
+                  setKeywordConflict({ keyword: cleaned, conflicts: res.conflicts, phoneNumber: res.phoneNumber });
+                  return; // keep the text in the input so it can be edited
                 }
                 updateConfig("keywords", [...keywords, cleaned]);
                 setKeywordDraft("");
               };
 
-              const removeKeyword = (kw: string) =>
-                updateConfig("keywords", keywords.filter((k) => k !== kw));
+              // Removing the LAST keyword turns this into an "any message"
+              // journey — only one of those is allowed per number.
+              const removeKeyword = async (kw: string) => {
+                const next = keywords.filter((k) => k !== kw);
+                if (!next.length) {
+                  const res = await checkKeywordClash([]);
+                  if (res?.conflicts.length) {
+                    setKeywordConflict({ keyword: kw, conflicts: res.conflicts, phoneNumber: res.phoneNumber });
+                    return;
+                  }
+                }
+                updateConfig("keywords", next);
+              };
 
               return (
                 <>
@@ -3293,6 +3425,8 @@ function BuilderInner() {
                       ))}
                       <div className="inline-flex items-center flex-1 min-w-[120px] py-1 px-1">
                         <input
+                          id="start-keyword-input"
+                          aria-label="Add trigger keyword"
                           type="text"
                           value={keywordDraft}
                           maxLength={WA_LIMITS.keyword}
@@ -3305,7 +3439,7 @@ function BuilderInner() {
                               removeKeyword(keywords[keywords.length - 1]);
                             }
                           }}
-                          onBlur={() => keywordDraft && addKeyword(keywordDraft)}
+                          onBlur={() => keywordDraft && !keywordConflict && addKeyword(keywordDraft)}
                           placeholder="+ Add keyword..."
                           className="w-full text-xs text-slate-700 placeholder:text-slate-400 bg-transparent border-0 focus:outline-none focus:ring-0 p-0"
                         />
@@ -3313,9 +3447,29 @@ function BuilderInner() {
                     </div>
 
                     <div className="flex items-center justify-between text-[11px] text-slate-400 px-0.5">
-                      <span>Press Enter or comma to add tag</span>
+                      <span>{keywordChecking ? "Checking keyword…" : "Press Enter or comma to add tag"}</span>
                       <span className="font-mono">{keywords.length} tags</span>
                     </div>
+
+                    {/* Clashes that already existed before keyword checks (or
+                        were created on another number). Saving isn't blocked
+                        for these, but the user should resolve them. */}
+                    {startClashes.length > 0 && (
+                      <div role="status" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800 space-y-1">
+                        <div className="font-semibold flex items-center gap-1.5">
+                          <i className="ph-bold ph-warning" aria-hidden="true" /> Shared with other journeys on this number
+                        </div>
+                        {[...new Map(startClashes.map((c) => [c.chatbotId, c])).values()].map((j) => (
+                          <div key={j.chatbotId}>
+                            {startClashes.filter((c) => c.chatbotId === j.chatbotId).map((c) => (c.catchAll ? "any message" : `“${c.keyword}”`)).join(", ")}
+                            {" "}— also used by{" "}
+                            <a href={`/chatbots/${j.chatbotId}/builder`} target="_blank" rel="noreferrer" className="font-semibold underline">{j.name}</a>
+                            {" "}({j.isActive ? "Active" : "Inactive"})
+                          </div>
+                        ))}
+                        <div className="text-amber-700/80">Each journey on a number needs its own keywords. Change these here or in the other journey.</div>
+                      </div>
+                    )}
                   </div>
 
                   {/* Match type */}
@@ -3333,12 +3487,12 @@ function BuilderInner() {
                         <option value="exact">Exact match</option>
                         <option value="contains">Contains keyword</option>
                         <option value="starts_with">Starts with</option>
-                        <option value="regex">Regex expression</option>
                       </select>
                       <i className="fa-solid fa-chevron-down absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 text-[10px] pointer-events-none" />
                     </div>
                     <p className="text-[11px] text-slate-400">
-                      Leave keywords empty to trigger on any message.
+                      Leave keywords empty to trigger on any message (only one such journey per phone number).
+                      Keywords ignore case, extra spaces and ending punctuation, and must be unique across the journeys on this number.
                     </p>
                   </div>
                 </>
@@ -3363,7 +3517,43 @@ function BuilderInner() {
         </aside>
       )}
       </div>
+      )}
       {/* end workspace row */}
+
+      {/* Trigger keyword already used by another journey on this number */}
+      {keywordConflict && (
+        <KeywordConflictDialog
+          keyword={keywordConflict.keyword}
+          conflicts={keywordConflict.conflicts}
+          phoneNumber={keywordConflict.phoneNumber}
+          onChangeKeyword={() => {
+            setKeywordConflict(null);
+            // Back to the Start block's keyword input so a new one can be typed.
+            const start = nodes.find((n) => n.data.nodeType === "START");
+            if (start) setSelectedId(start.id);
+            setTimeout(() => (document.getElementById("start-keyword-input") as HTMLInputElement | null)?.select(), 80);
+          }}
+          onCancel={() => {
+            setKeywordConflict(null);
+            setKeywordDraft(""); // drop the duplicate keyword
+          }}
+        />
+      )}
+
+      {/* Autosave was rejected because of a keyword clash */}
+      {autoSave.conflict && !keywordConflict && (
+        <div role="alert" className="fixed top-28 left-1/2 -translate-x-1/2 z-[60] max-w-xl w-[calc(100%-2rem)] rounded-xl border border-amber-200 bg-amber-50 shadow-lg px-4 py-2.5 text-xs text-amber-900 flex items-center gap-3">
+          <i className="ph-bold ph-warning text-amber-600 text-base" aria-hidden="true" />
+          <span className="flex-1">Changes aren’t being saved: a trigger keyword is already used by another journey on this number.</span>
+          <button
+            type="button"
+            onClick={() => setKeywordConflict({ keyword: autoSave.conflict!.find((c) => !c.catchAll)?.keyword ?? "", conflicts: autoSave.conflict! })}
+            className="font-semibold underline shrink-0"
+          >
+            Review
+          </button>
+        </div>
+      )}
 
       {/* The test chat and the AI generator both float bottom-right; while one
           is open, the other's launcher is hidden so they never overlap. */}
@@ -3380,7 +3570,7 @@ function BuilderInner() {
         onApply={applyGeneratedDefinition}
         hasExistingNodes={nodes.filter((n) => n.data.nodeType !== "START").length > 0}
         getCurrentDefinition={buildDefinition}
-        hideLauncher={testPanelOpen}
+        hideLauncher={testPanelOpen || contentMode}
         onOpenChange={setAiPanelOpen}
         onFocusNode={focusNode}
         onBuildingChange={setAiBuilding}
@@ -4144,12 +4334,6 @@ function BuilderInner() {
         </div>
       )}
 
-      {/* Content Mode overlay — WhatsApp content editor on top of the canvas. */}
-      {showContentEditor && (
-        <div className="absolute inset-0 z-50 bg-slate-50">
-          <ContentEditor botName={botName || "Bot AI Check"} onClose={() => setShowContentEditor(false)} />
-        </div>
-      )}
     </div>
     </VariableSourceProvider>
   );

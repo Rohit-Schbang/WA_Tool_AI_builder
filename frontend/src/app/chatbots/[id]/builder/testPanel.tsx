@@ -7,7 +7,8 @@ interface Option { id: string; label: string; }
 interface Media { type: "image" | "document" | "video"; url: string; }
 interface Cta { label: string; url: string; }
 interface ChatMessage {
-  from: "user" | "bot";
+  // "system" = a note from the simulator itself (e.g. a skipped long delay).
+  from: "user" | "bot" | "system";
   text: string;
   options?: Option[];
   media?: Media;
@@ -17,6 +18,18 @@ interface ChatMessage {
 
 function nowLabel() {
   return new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+// Delay blocks up to this long are replayed in real time in the test chat;
+// longer ones are noted and skipped so a test never sits for hours.
+const MAX_REPLAY_SECONDS = 30;
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+function formatDuration(secs: number): string {
+  if (secs < 60) return `${secs}s`;
+  if (secs < 3600) return `${Math.round(secs / 60)} min`;
+  return `${+(secs / 3600).toFixed(1)} h`;
 }
 
 // A floating chat widget that tests the PUBLISHED flow via the real
@@ -47,13 +60,18 @@ export function TestPanel({
   const [sessionId, setSessionId] = useState<string>("");
 
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Seconds of the Delay block currently being replayed (null = none).
+  const [waitingSecs, setWaitingSecs] = useState<number | null>(null);
+  // Bumped on restart so an in-progress replay of the old session stops.
+  const playToken = useRef(0);
 
   // Keep the chat pinned to the latest message.
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-  }, [messages, loading, activeOptions]);
+  }, [messages, loading, activeOptions, waitingSecs]);
 
   async function send(message: string, sid: string) {
+    const token = playToken.current;
     setLoading(true);
     setActiveOptions([]);
     try {
@@ -82,32 +100,47 @@ export function TestPanel({
         return;
       }
 
-      const botMsgs: ChatMessage[] = (data.replies ?? []).map((r: any) => ({
-        from: "bot" as const,
-        text: r.text,
-        options: r.options,
-        media: r.media,
-        cta: r.cta,
-        time: nowLabel(),
-      }));
+      const replies: any[] = data.replies ?? [];
 
       // Never go silently blank — tell the user if nothing came back.
-      if (botMsgs.length === 0) {
+      if (!replies.some((r) => r.delaySeconds == null)) {
         setMessages((m) => [...m, { from: "bot", text: "⚠️ No reply produced. Make sure the chatbot is published and active.", time: nowLabel() }]);
         setEnded(true);
         return;
       }
 
-      setMessages((m) => [...m, ...botMsgs]);
-
-      const last = botMsgs[botMsgs.length - 1];
-      setActiveOptions(last?.options ?? []);
+      // Replay in order, like WhatsApp would: each message appears when it's
+      // sent, and Delay blocks pause before the next one.
+      let lastOptions: Option[] = [];
+      for (const r of replies) {
+        if (playToken.current !== token) return; // restarted mid-replay
+        if (r.delaySeconds != null) {
+          const secs = Number(r.delaySeconds) || 0;
+          if (secs > MAX_REPLAY_SECONDS) {
+            setMessages((m) => [...m, { from: "system", text: `⏱ Delay of ${formatDuration(secs)} skipped in test`, time: nowLabel() }]);
+            continue;
+          }
+          setWaitingSecs(secs);
+          await sleep(secs * 1000);
+          setWaitingSecs(null);
+          continue;
+        }
+        setMessages((m) => [...m, { from: "bot", text: r.text, options: r.options, media: r.media, cta: r.cta, time: nowLabel() }]);
+        lastOptions = r.options ?? [];
+      }
+      if (playToken.current !== token) return;
+      setActiveOptions(lastOptions);
 
       if (data.status === "completed") setEnded(true);
     } catch (err: any) {
+      if (playToken.current !== token) return;
       setMessages((m) => [...m, { from: "bot", text: "⚠️ " + (err.response?.data?.error ?? "Test failed."), time: nowLabel() }]);
     } finally {
-      setLoading(false);
+      // Don't clear the loading state of a NEW session that started meanwhile.
+      if (playToken.current === token) {
+        setLoading(false);
+        setWaitingSecs(null);
+      }
     }
   }
 
@@ -128,6 +161,8 @@ export function TestPanel({
 
   // Start a brand-new test session (new conversation).
   function startOver() {
+    playToken.current += 1; // stop any replay still running for the old session
+    setWaitingSecs(null);
     const sid = "web-test-" + Math.random().toString(36).slice(2, 9);
     setSessionId(sid);
     setMessages([]);
@@ -224,7 +259,11 @@ export function TestPanel({
             </div>
 
             {messages.map((m, i) => (
-              m.from === "bot" ? (
+              m.from === "system" ? (
+                <div key={i} className="flex justify-center">
+                  <span className="px-2.5 py-1 rounded-full bg-amber-50 border border-amber-200 text-[11px] text-amber-800">{m.text}</span>
+                </div>
+              ) : m.from === "bot" ? (
                 <div key={i} className="flex items-start max-w-[88%] self-start">
                   <div className="pf-bot-tail bg-slate-900 text-white px-3.5 py-2.5 rounded-2xl rounded-tl-sm shadow-sm space-y-1">
                     {m.media?.type === "image" && (
@@ -291,6 +330,9 @@ export function TestPanel({
                     <span className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce [animation-delay:-0.3s]"></span>
                     <span className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce [animation-delay:-0.15s]"></span>
                     <span className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce"></span>
+                    {waitingSecs != null && (
+                      <span className="ml-2 text-[11px] text-slate-300">Delay block · {formatDuration(waitingSecs)}</span>
+                    )}
                   </span>
                 </div>
               </div>
