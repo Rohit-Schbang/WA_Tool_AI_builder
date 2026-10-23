@@ -129,7 +129,7 @@ export function Sidebar({ active }: { active?: SidebarItem }) {
             </span>
           </div>
           <div className="flex flex-col">
-            <span className="font-headline-sm text-headline-sm text-on-surface dark:text-slate-100 tracking-tight leading-none">Whatsbang</span>
+            <span className="font-headline-sm text-headline-sm text-on-surface dark:text-slate-100 tracking-tight leading-none">Whatsflow</span>
             <span className="font-label-sm text-label-sm text-on-surface-variant dark:text-slate-400 leading-tight mt-0.5">
               WhatsApp Automation
             </span>

@@ -1561,7 +1561,7 @@ function BuilderInner() {
           <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-brand-600 to-teal-400 flex items-center justify-center text-white shadow-xs">
             <i className="ph-bold ph-chat-teardrop-dots text-base" />
           </div>
-          <span className="font-extrabold text-slate-900 tracking-tight text-sm">Whatsbang</span>
+          <span className="font-extrabold text-slate-900 tracking-tight text-sm">Whatsflow</span>
           <span className="text-[9px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-brand-50 text-brand-700 border border-brand-200">Cloud</span>
           <span className="text-xs font-semibold text-slate-500 ml-2 hidden md:inline">Flow Builder</span>
           {botName && (

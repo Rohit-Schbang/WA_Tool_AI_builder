@@ -4,7 +4,7 @@ import "./globals.css";
 import { DialogHost } from "./components/Dialog";
 
 export const metadata = {
-  title: "Whatsbang",
+  title: "Whatsflow",
   description: "WhatsApp automation and chatbot builder",
 };
 
@@ -31,7 +31,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             render but before hydration, causing a hydration-mismatch error and
             repainting our light UI (black input text on dark backgrounds). */}
         <meta name="darkreader-lock" />
-        {/* Fonts used by the Whatsbang "Sky & Peach" auth pages (login/register). */}
+        {/* Fonts used by the Whatsflow "Sky & Peach" auth pages (login/register). */}
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
         <link

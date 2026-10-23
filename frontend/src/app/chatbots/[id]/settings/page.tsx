@@ -358,7 +358,7 @@ export default function SettingsPage() {
                         data-lpignore="true"
                         data-1p-ignore="true"
                         className={inputClass}
-                        placeholder="e.g. Whatsbang Store"
+                        placeholder="e.g. Whatsflow Store"
                         value={businessName}
                         onChange={(e) => setBusinessName(e.target.value)}
                       />
