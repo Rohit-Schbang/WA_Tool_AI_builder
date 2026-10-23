@@ -10,6 +10,8 @@ import { EditableBotName } from "@/app/components/EditableBotName";
 import { dialog } from "@/app/components/Dialog";
 import { downloadJson, journeyFileName, wrapJourneyExport } from "@/lib/exportJourney";
 import { ImportJourneyDialog } from "./ImportJourneyDialog";
+import { ActivationConflictDialog } from "./ActivationConflictDialog";
+import type { KeywordConflict } from "@/lib/keywords";
 
 
 
@@ -43,6 +45,10 @@ export default function ChatbotsPage() {
 
     // Import-from-JSON dialog.
     const [showImport, setShowImport] = useState(false)
+
+    // Alert when switching a journey ON clashes with an active journey's keyword.
+    const [activationConflict, setActivationConflict] = useState<{ botId: string; name: string; conflicts: KeywordConflict[] } | null>(null)
+    const [activationBusy, setActivationBusy] = useState(false)
 
     // ------------------->>> Getting all BOTS
 
@@ -99,8 +105,36 @@ export default function ChatbotsPage() {
     //  ---------------------->>> Handle BOT status 
 
     async function handleToggleActive(id: string, isActive: boolean) {
-        await api.patch(`/api/chatbots/${id}/activate`, { isActive: !isActive });
+        setError("")
+        try {
+            await api.patch(`/api/chatbots/${id}/activate`, { isActive: !isActive });
+        } catch (err: any) {
+            // Another ACTIVE journey on the same number shares a trigger keyword.
+            const data = err?.response?.data
+            if (err?.response?.status === 409 && data?.code === "KEYWORD_CONFLICT") {
+                const bot = bots.find((b) => b.id === id)
+                setActivationConflict({ botId: id, name: bot?.name ?? "this journey", conflicts: data.conflicts ?? [] })
+            } else {
+                setError(data?.error ?? "Couldn't change the bot's status.")
+            }
+        }
         loadBots();
+    }
+
+    // Alert action: switch the clashing journey(s) off, then activate this one.
+    async function activateReplacingConflicts() {
+        if (!activationConflict) return
+        setActivationBusy(true)
+        try {
+            await api.patch(`/api/chatbots/${activationConflict.botId}/activate`, { isActive: true, deactivateConflicting: true })
+            setActivationConflict(null)
+        } catch (err: any) {
+            setError(err?.response?.data?.error ?? "Couldn't activate the journey.")
+            setActivationConflict(null)
+        } finally {
+            setActivationBusy(false)
+            loadBots()
+        }
     }
 
     //  ---------------------->>> Deletetion of BOT
@@ -444,6 +478,17 @@ export default function ChatbotsPage() {
                     </div>
                 </main>
             </div>
+
+            {activationConflict && (
+                <ActivationConflictDialog
+                    journeyName={activationConflict.name}
+                    conflicts={activationConflict.conflicts}
+                    busy={activationBusy}
+                    onDeactivateOthers={activateReplacingConflicts}
+                    onEditKeywords={() => { const id = activationConflict.botId; setActivationConflict(null); router.push(`/chatbots/${id}/builder`) }}
+                    onCancel={() => setActivationConflict(null)}
+                />
+            )}
 
             <ImportJourneyDialog
                 open={showImport}
