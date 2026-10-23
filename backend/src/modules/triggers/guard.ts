@@ -107,6 +107,68 @@ export async function checkKeywords(chatbotId: string, keys: string[]): Promise<
   };
 }
 
+// Keys of a journey's LIVE version (what the webhook routes on).
+async function liveKeys(db: Db, activeVersionId: string | null): Promise<Set<string>> {
+  if (!activeVersionId) return new Set();
+  const v = await db.workflowVersion.findUnique({ where: { id: activeVersionId }, select: { definition: true } });
+  return new Set(v ? reservedKeys(v.definition) : []);
+}
+
+// Live trigger keywords of THIS journey that another ACTIVE journey on the same
+// number also answers to. Two active journeys sharing a keyword would make
+// routing ambiguous, so activation is refused while these exist.
+export async function activeClashes(db: Db, chatbotId: string): Promise<{ phoneNumberId: string | null; conflicts: KeywordConflict[] }> {
+  const conn = await db.connection.findUnique({
+    where: { chatbotId },
+    select: { phoneNumberId: true, chatbot: { select: { activeVersionId: true } } },
+  });
+  if (!conn?.phoneNumberId) return { phoneNumberId: null, conflicts: [] };
+  const mine = await liveKeys(db, conn.chatbot.activeVersionId);
+  if (!mine.size) return { phoneNumberId: conn.phoneNumberId, conflicts: [] };
+
+  const others = await db.connection.findMany({
+    where: { phoneNumberId: conn.phoneNumberId, chatbotId: { not: chatbotId }, chatbot: { isActive: true, activeVersionId: { not: null } } },
+    select: { chatbotId: true, chatbot: { select: { name: true, isActive: true, activeVersionId: true } } },
+  });
+  const conflicts: KeywordConflict[] = [];
+  for (const o of others) {
+    const theirs = await liveKeys(db, o.chatbot.activeVersionId);
+    for (const k of mine) {
+      if (theirs.has(k)) {
+        conflicts.push({ keyword: k, catchAll: k === ANY_MESSAGE, chatbotId: o.chatbotId, name: o.chatbot.name, isActive: true, isLive: true });
+      }
+    }
+  }
+  return { phoneNumberId: conn.phoneNumberId, conflicts };
+}
+
+// Turn a journey ON safely: refuse (KeywordConflictError) if another ACTIVE
+// journey on its number shares a live trigger keyword — unless
+// `deactivateConflicting` is set, in which case those journeys are switched
+// off first, in the same locked transaction. Returns the ids switched off.
+export async function guardActivation(
+  chatbotId: string,
+  deactivateConflicting: boolean
+): Promise<{ deactivated: { chatbotId: string; name: string }[] }> {
+  return prisma.$transaction(async (tx) => {
+    const first = await activeClashes(tx, chatbotId);
+    if (!first.phoneNumberId) {
+      await tx.chatbot.update({ where: { id: chatbotId }, data: { isActive: true } });
+      return { deactivated: [] };
+    }
+    await lockNumber(tx, first.phoneNumberId);
+    const { conflicts } = await activeClashes(tx, chatbotId); // re-read under the lock
+    if (conflicts.length && !deactivateConflicting) throw new KeywordConflictError(conflicts);
+
+    const off = [...new Map(conflicts.map((c) => [c.chatbotId, { chatbotId: c.chatbotId, name: c.name }])).values()];
+    if (off.length) {
+      await tx.chatbot.updateMany({ where: { id: { in: off.map((o) => o.chatbotId) } }, data: { isActive: false } });
+    }
+    await tx.chatbot.update({ where: { id: chatbotId }, data: { isActive: true } });
+    return { deactivated: off };
+  }, { timeout: 20_000, maxWait: 10_000 });
+}
+
 // Run `write` only if it adds no NEW keyword clash on the journey's number.
 //   next.draft / next.live : definitions this write will store (omit = unchanged)
 //   next.phoneNumberId     : the number the journey will be on (omit = unchanged)
