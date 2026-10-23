@@ -344,6 +344,14 @@ const wait: NodeExecutor = async (node, ctx) => {
   const seconds = Math.max(0, Math.min(MAX_DELAY_SECONDS, Number(node.config.seconds) || 0));
   const key = waitUntilKey(node.id);
 
+  // Web tester: record the pause and move on immediately, so the messages before
+  // the delay reach the test chat right away and it replays the gap itself.
+  if (ctx.simulateDelays && ctx.messaging.recordDelay) {
+    delete ctx.variables[key];
+    if (seconds > 0) await ctx.messaging.recordDelay(seconds);
+    return { action: "next" };
+  }
+
   // Resuming a longer delay (sweeper, or a user message after it's due).
   if (ctx.variables[key] != null) {
     if (Date.now() < Number(ctx.variables[key])) return { action: "wait" }; // not due yet: ignore the message

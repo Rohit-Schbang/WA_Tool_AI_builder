@@ -52,6 +52,12 @@ export class LoggingAdapter implements MessagingAdapter {
     }
   }
 
+  // Test mode: pass Delay markers through to the wrapped (test) adapter. Not a
+  // message, so nothing is logged.
+  async recordDelay(seconds: number): Promise<void> {
+    await this.inner.recordDelay?.(seconds);
+  }
+
   async sendCtaUrl(to: string, text: string, buttonText: string, url: string, footer?: string): Promise<void> {
     await this.log("cta_url", { text, buttonText, url, footer });
     if (this.inner.sendCtaUrl) {

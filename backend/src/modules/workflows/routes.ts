@@ -384,10 +384,17 @@ workflowsRouter.post("/test", async (req: Request, res: Response) => {
     bypassTrigger: true,
     // Test what's on the canvas (latest saved draft), not the last publish.
     useDraft: true,
+    // Don't sleep on Delay blocks here — return them as markers so the test
+    // chat shows the messages before a delay immediately and replays the gap.
+    simulateDelays: true,
   });
 
   return res.json({
     status: result.status,
-    replies: adapter.sent.map((m) => ({ text: m.text, options: m.options, media: m.media, cta: m.cta })),
+    replies: adapter.sent.map((m) =>
+      m.delaySeconds != null
+        ? { delaySeconds: m.delaySeconds }
+        : { text: m.text, options: m.options, media: m.media, cta: m.cta }
+    ),
   });
 });

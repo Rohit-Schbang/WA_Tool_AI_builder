@@ -95,6 +95,10 @@ export interface ExecutionContext {
     messaging: MessagingAdapter
     // #1 — global API configs keyed by name (for API_REQUEST nodes).
     apiConfigs?: Record<string, ApiConfig>
+    // Web tester: don't really sleep on Delay blocks — hand the delay to the
+    // messaging adapter (recordDelay) so the test chat can replay it. The live
+    // WhatsApp path never sets this.
+    simulateDelays?: boolean
 }
 
 // An option for interactive messages (button or list row).
@@ -128,6 +132,9 @@ export interface MessagingAdapter {
   sendRichMessage?(to: string, msg: RichMessage): Promise<void>;
   // #10 — a call-to-action URL button (opens a link in WhatsApp).
   sendCtaUrl?(to: string, text: string, buttonText: string, url: string, footer?: string): Promise<void>;
+  // Test mode only: a Delay block was reached. The web tester records it and
+  // replays the pause client-side instead of the server actually sleeping.
+  recordDelay?(seconds: number): Promise<void>;
 }
 
 

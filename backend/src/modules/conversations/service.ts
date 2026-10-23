@@ -70,7 +70,9 @@ export async function handleInboundMessage(
     // the message is treated as plain text, exactly as before.
     // `profileName` is the WhatsApp display name from the webhook (if any); used
     // to name a freshly auto-created Contact. Omitted by the web tester.
-    opts: { bypassTrigger?: boolean; useDraft?: boolean; profileName?: string | null; inbound?: { type: InboundType; media?: InboundMedia | null } } = {}
+    // `simulateDelays` (web tester only): Delay blocks don't sleep on the server;
+    // they're returned as markers so the test chat replays the pause.
+    opts: { bypassTrigger?: boolean; useDraft?: boolean; simulateDelays?: boolean; profileName?: string | null; inbound?: { type: InboundType; media?: InboundMedia | null } } = {}
 ): Promise<{ status: string }> {
 
 
@@ -216,6 +218,7 @@ export async function handleInboundMessage(
         incomingMedia: inboundMedia,
         messaging: loggingMessaging,
         apiConfigs,
+        simulateDelays: !!opts.simulateDelays,
     };
 
     // 4. Determine where to start.

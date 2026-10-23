@@ -9,6 +9,9 @@ export interface SentMessage {
     options?: MessageOption[];
     media?: { type: "image" | "document" | "video"; url: string };
     cta?: { label: string; url: string };
+    // Test mode: a Delay block between messages (no text). The test chat waits
+    // this long before showing the next message.
+    delaySeconds?: number;
 }
 
 // A test Adapter that records outgoing messages (no real WhatsApp).
@@ -19,6 +22,11 @@ export class ConsoleAdapter implements MessagingAdapter {
     async sendText(to: string, text: string): Promise<void> {
         this.sent.push({ to, text });
         console.log(`[Console Adapter ] -> ${to} : ${text}`)
+    }
+
+    // Record a Delay block so the test chat can replay the pause.
+    async recordDelay(seconds: number): Promise<void> {
+        this.sent.push({ to: "", text: "", delaySeconds: seconds });
     }
 
     async sendButtons(to: string, text: string, buttons: MessageOption[]): Promise<void> {
