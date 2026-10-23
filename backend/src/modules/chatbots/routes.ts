@@ -107,13 +107,13 @@ chatbotsRouter.patch("/:id/activate", async (req: Request, res: Response) => {
   const existing = await getChatbot(req.params.id)
   if (!existing) return res.status(404).json({ error: "ChatBot Not Found" })
   try {
-    const { deactivated } = await guardActivation(existing.id, parsed.data.deactivateConflicting)
+    const { deactivated, notConnected } = await guardActivation(existing.id, parsed.data.deactivateConflicting)
     for (const d of deactivated) {
       logActivity(req, "chatbot.deactivate", { chatbotId: d.chatbotId, details: { reason: `trigger keyword clash with "${existing.name}"` } })
     }
     logActivity(req, "chatbot.activate", { chatbotId: existing.id })
     const bot = await getChatbot(existing.id)
-    return res.status(200).json({ ...bot, deactivated })
+    return res.status(200).json({ ...bot, deactivated, notConnected })
   } catch (err) {
     if (err instanceof KeywordConflictError) {
       return res.status(409).json({

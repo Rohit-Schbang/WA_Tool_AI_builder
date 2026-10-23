@@ -107,35 +107,34 @@ export async function checkKeywords(chatbotId: string, keys: string[]): Promise<
   };
 }
 
-// Keys of a journey's LIVE version (what the webhook routes on).
-async function liveKeys(db: Db, activeVersionId: string | null): Promise<Set<string>> {
-  if (!activeVersionId) return new Set();
-  const v = await db.workflowVersion.findUnique({ where: { id: activeVersionId }, select: { definition: true } });
-  return new Set(v ? reservedKeys(v.definition) : []);
-}
-
-// Live trigger keywords of THIS journey that another ACTIVE journey on the same
-// number also answers to. Two active journeys sharing a keyword would make
-// routing ambiguous, so activation is refused while these exist.
+// Trigger keywords of THIS journey (draft + published) that another ACTIVE
+// journey on the same number also holds (draft + published). Drafts count on
+// both sides: an active-but-unpublished journey goes live with its draft's
+// keywords on its next publish, so two active journeys sharing one would make
+// routing ambiguous. Activation is refused while these exist.
 export async function activeClashes(db: Db, chatbotId: string): Promise<{ phoneNumberId: string | null; conflicts: KeywordConflict[] }> {
-  const conn = await db.connection.findUnique({
-    where: { chatbotId },
-    select: { phoneNumberId: true, chatbot: { select: { activeVersionId: true } } },
-  });
+  const conn = await db.connection.findUnique({ where: { chatbotId }, select: { phoneNumberId: true } });
   if (!conn?.phoneNumberId) return { phoneNumberId: null, conflicts: [] };
-  const mine = await liveKeys(db, conn.chatbot.activeVersionId);
+  const mine = await reservedForBot(db, chatbotId);
   if (!mine.size) return { phoneNumberId: conn.phoneNumberId, conflicts: [] };
 
   const others = await db.connection.findMany({
-    where: { phoneNumberId: conn.phoneNumberId, chatbotId: { not: chatbotId }, chatbot: { isActive: true, activeVersionId: { not: null } } },
-    select: { chatbotId: true, chatbot: { select: { name: true, isActive: true, activeVersionId: true } } },
+    where: { phoneNumberId: conn.phoneNumberId, chatbotId: { not: chatbotId }, chatbot: { isActive: true } },
+    select: { chatbotId: true, chatbot: { select: { name: true, activeVersionId: true } } },
   });
   const conflicts: KeywordConflict[] = [];
   for (const o of others) {
-    const theirs = await liveKeys(db, o.chatbot.activeVersionId);
+    const theirs = await reservedForBot(db, o.chatbotId);
     for (const k of mine) {
       if (theirs.has(k)) {
-        conflicts.push({ keyword: k, catchAll: k === ANY_MESSAGE, chatbotId: o.chatbotId, name: o.chatbot.name, isActive: true, isLive: true });
+        conflicts.push({
+          keyword: k,
+          catchAll: k === ANY_MESSAGE,
+          chatbotId: o.chatbotId,
+          name: o.chatbot.name,
+          isActive: true,
+          isLive: !!o.chatbot.activeVersionId,
+        });
       }
     }
   }
@@ -149,12 +148,14 @@ export async function activeClashes(db: Db, chatbotId: string): Promise<{ phoneN
 export async function guardActivation(
   chatbotId: string,
   deactivateConflicting: boolean
-): Promise<{ deactivated: { chatbotId: string; name: string }[] }> {
+): Promise<{ deactivated: { chatbotId: string; name: string }[]; notConnected: boolean }> {
   return prisma.$transaction(async (tx) => {
     const first = await activeClashes(tx, chatbotId);
     if (!first.phoneNumberId) {
+      // Not on any WhatsApp number yet, so there's nothing to clash with (and
+      // it can't reply either). Activated; the caller tells the user.
       await tx.chatbot.update({ where: { id: chatbotId }, data: { isActive: true } });
-      return { deactivated: [] };
+      return { deactivated: [], notConnected: true };
     }
     await lockNumber(tx, first.phoneNumberId);
     const { conflicts } = await activeClashes(tx, chatbotId); // re-read under the lock
@@ -165,7 +166,7 @@ export async function guardActivation(
       await tx.chatbot.updateMany({ where: { id: { in: off.map((o) => o.chatbotId) } }, data: { isActive: false } });
     }
     await tx.chatbot.update({ where: { id: chatbotId }, data: { isActive: true } });
-    return { deactivated: off };
+    return { deactivated: off, notConnected: false };
   }, { timeout: 20_000, maxWait: 10_000 });
 }
 

@@ -49,6 +49,8 @@ export default function ChatbotsPage() {
     // Alert when switching a journey ON clashes with an active journey's keyword.
     const [activationConflict, setActivationConflict] = useState<{ botId: string; name: string; conflicts: KeywordConflict[] } | null>(null)
     const [activationBusy, setActivationBusy] = useState(false)
+    // Non-error info shown above the cards (e.g. activated without a number).
+    const [notice, setNotice] = useState("")
 
     // ------------------->>> Getting all BOTS
 
@@ -106,8 +108,15 @@ export default function ChatbotsPage() {
 
     async function handleToggleActive(id: string, isActive: boolean) {
         setError("")
+        setNotice("")
         try {
-            await api.patch(`/api/chatbots/${id}/activate`, { isActive: !isActive });
+            const res = await api.patch(`/api/chatbots/${id}/activate`, { isActive: !isActive });
+            // Keyword clashes are checked per WhatsApp number — a journey with no
+            // number can't be checked (or reply), so say so instead of silently passing.
+            if (!isActive && res.data?.notConnected) {
+                const bot = bots.find((b) => b.id === id)
+                setNotice(`“${bot?.name ?? "This journey"}” is active, but it isn't connected to a WhatsApp number yet, so it won't reply and its trigger keywords can't be checked against other journeys. Connect a number in its WhatsApp Settings.`)
+            }
         } catch (err: any) {
             // Another ACTIVE journey on the same number shares a trigger keyword.
             const data = err?.response?.data
@@ -320,6 +329,15 @@ export default function ChatbotsPage() {
 
                         {error && (
                             <div className="p-3 rounded-xl bg-error-container text-on-error-container font-label-md text-label-md">{error}</div>
+                        )}
+                        {notice && (
+                            <div role="status" className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 font-label-md text-label-md flex items-start gap-2">
+                                <span className="material-symbols-outlined text-[18px] text-amber-600">info</span>
+                                <span className="flex-1">{notice}</span>
+                                <button type="button" onClick={() => setNotice("")} className="text-amber-700 hover:text-amber-900" aria-label="Dismiss">
+                                    <span className="material-symbols-outlined text-[18px]">close</span>
+                                </button>
+                            </div>
                         )}
 
                         {/* 4. Bot cards grid */}
