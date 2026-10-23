@@ -436,7 +436,7 @@ export async function simulateBranches(def: Def, spec: FlowSpec, d: ParsedDiagra
           add("not_tested", `“${s.title}” (${op}${value ? ` “${value}”` : ""}) can't be simulated automatically.`, s);
           continue;
         }
-        for (const [label, vars] of [["true", { [field]: value }], ["else", { [field]: "__Whatsflow_no_match__" }]] as const) {
+        for (const [label, vars] of [["true", { [field]: value }], ["else", { [field]: "__whatsbang_no_match__" }]] as const) {
           const r = await exec(node, ctxFor(vars, null));
           const h = handleOf(r);
           const next = nextNodeId(def, s.id, h);

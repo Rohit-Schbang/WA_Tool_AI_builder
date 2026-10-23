@@ -1,6 +1,5 @@
 import { config } from "../../../infra/config.js";
 import { getConnection, upsertConnection } from "./service.js";
-import { guardKeywords } from "../../triggers/guard.js";
 import { prisma } from "../../../infra/prisma.js";
 import type { Connection } from "@prisma/client";
 
@@ -34,14 +33,9 @@ export class EmbeddedSignupError extends Error {
   }
 }
 
-// A real Meta id: digits only, and not a placeholder like "000000000000000".
-const isRealMetaId = (v?: string) => !!v && /^\d{5,25}$/.test(v.trim()) && !/^0+$/.test(v.trim());
-
 // True when the Meta credentials needed for embedded signup are configured.
-// Placeholder values count as "not configured", so the settings page falls
-// back to manual setup instead of opening a Meta popup that can only fail.
 export function isEmbeddedSignupConfigured(): boolean {
-  return Boolean(isRealMetaId(config.META_APP_ID) && config.META_APP_SECRET && isRealMetaId(config.META_CONFIG_ID));
+  return Boolean(config.META_APP_ID && config.META_APP_SECRET && config.META_CONFIG_ID);
 }
 
 async function graphFetch(url: string, init: RequestInit, step: string): Promise<any> {
@@ -236,60 +230,20 @@ function graphErrorCode(err: unknown): number | undefined {
 // Read the phone number's current platform + verification status. Used both at
 // connect time and by the periodic health check so the dashboard can show a
 // live "number status" like Gupshup/Wati do.
-export // Fields we always read for the health card. All are documented phone-number
-// fields; a field Meta doesn't know would fail the whole call (error 100).
-const PHONE_STATUS_FIELDS = "display_phone_number,verified_name,code_verification_status,name_status,quality_rating,platform_type";
-// Extra, purely informational fields shown in the raw "Meta response". Read in
-// a separate best-effort call so a field missing on an older Graph version or
-// account can never break the health check or mark the connection broken.
-const PHONE_EXTRA_FIELDS = "status,account_mode,messaging_limit_tier,is_official_business_account,throughput";
-
-// What Meta returned for the number, exactly as sent (no secrets: these are
-// public facts about the phone number), plus what we asked for.
-export interface MetaPhoneResponse {
-  request: string;                 // e.g. "GET /v22.0/{phone-number-id}?fields=…"
-  fetchedAt: string;
-  response: Record<string, unknown>;
-  extraResponse: Record<string, unknown> | null;  // best-effort extra fields
-  extraError: string | null;
-}
-
 export async function getPhoneStatus(
   phoneNumberId: string,
   token: string
-): Promise<{ status?: string; nameStatus?: string; quality?: string; displayPhoneNumber?: string; meta: MetaPhoneResponse }> {
+): Promise<{ status?: string; nameStatus?: string; quality?: string; displayPhoneNumber?: string }> {
   const data = await graphFetch(
-    `${GRAPH()}/${phoneNumberId}?fields=${PHONE_STATUS_FIELDS}`,
+    `${GRAPH()}/${phoneNumberId}?fields=display_phone_number,verified_name,code_verification_status,name_status,quality_rating,platform_type`,
     { headers: { Authorization: `Bearer ${token}` } },
     "Fetch phone status"
   );
-
-  let extraResponse: Record<string, unknown> | null = null;
-  let extraError: string | null = null;
-  try {
-    extraResponse = await graphFetch(
-      `${GRAPH()}/${phoneNumberId}?fields=${PHONE_EXTRA_FIELDS}`,
-      { headers: { Authorization: `Bearer ${token}` } },
-      "Fetch phone details"
-    );
-  } catch (err) {
-    extraError = err instanceof Error ? err.message : "Not available";
-  }
-
   return {
-    // code_verification_status only: the old fallback to platform_type
-    // ("CLOUD_API") put an unrelated value in the Verification box.
-    status: data?.code_verification_status,
+    status: data?.code_verification_status ?? data?.platform_type,
     nameStatus: data?.name_status,
     quality: data?.quality_rating,
     displayPhoneNumber: data?.display_phone_number,
-    meta: {
-      request: `GET /${config.META_GRAPH_VERSION}/${phoneNumberId}?fields=${PHONE_STATUS_FIELDS}`,
-      fetchedAt: new Date().toISOString(),
-      response: data ?? {},
-      extraResponse,
-      extraError,
-    },
   };
 }
 
@@ -304,11 +258,6 @@ export async function completeEmbeddedSignup(
     );
   }
 
-  // Fail fast — before any Meta calls — if this journey's trigger keywords
-  // clash with a journey already on that number (throws KeywordConflictError).
-  // It's checked again under the lock when the connection is saved below.
-  await guardKeywords(chatbotId, { phoneNumberId: input.phoneNumberId }, async () => true);
-
   const accessToken = await exchangeCodeForToken(input.code);
 
   // These are best-effort reads (cosmetic) + required side-effects.
@@ -321,9 +270,8 @@ export async function completeEmbeddedSignup(
   await registerPhoneNumber(input.phoneNumberId, accessToken);
   const owner = await getTokenOwner(accessToken);
 
-  // Persist. accessToken here is the BISU token used to send messages. Saved
-  // under the per-number keyword lock so a clash can't appear meanwhile.
-  const { result } = await guardKeywords(chatbotId, { phoneNumberId: input.phoneNumberId }, () => upsertConnection(chatbotId, {
+  // Persist. accessToken here is the BISU token used to send messages.
+  return upsertConnection(chatbotId, {
     accessToken,
     wabaId: input.wabaId,
     phoneNumberId: input.phoneNumberId,
@@ -334,8 +282,7 @@ export async function completeEmbeddedSignup(
     appId: config.META_APP_ID,
     appSecret: config.META_APP_SECRET,
     status: "CONNECTED",
-  }));
-  return result;
+  });
 }
 
 // ---------------------------------------------------------------------------

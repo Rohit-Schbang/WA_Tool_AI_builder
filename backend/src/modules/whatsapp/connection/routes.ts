@@ -7,7 +7,6 @@ import { logActivity } from "../../activity/service.js";
 import { getConnection, ToSafeConnection, upsertConnection, type ConnectionInput } from "./service.js";
 import { config } from "../../../infra/config.js";
 import { completeEmbeddedSignup, isEmbeddedSignupConfigured, EmbeddedSignupError, getConnectionHealth, verifyManualCredentials } from "./embeddedSignup.js";
-import { guardKeywords, KeywordConflictError } from "../../triggers/guard.js";
 export const whatsappRouter = Router();
 
 
@@ -59,15 +58,13 @@ connectionRouter.get("/", async (req: Request, res: Response) => {
 
   const bot = await getChatbot(chatbotId)
 
-  // Distinguish "this journey was deleted" from "no number connected yet" so
-  // the settings page can stop polling and say so.
-  if (!bot) return res.status(404).json({ error: "Chatbot not found", code: "CHATBOT_NOT_FOUND" })
+  if (!bot) return res.status(404).json({ error: "Chatbot not found" })
 
   const connection = await getConnection(chatbotId)
 
   // Getting connection ----->>>>>
 
-  if (!connection) return res.status(404).json({ error: "No Connection Configured", code: "NOT_CONFIGURED" })
+  if (!connection) return res.status(404).json({ error: "No Connection Configured" })
 
   return res.json(ToSafeConnection(connection))
 
@@ -134,17 +131,7 @@ connectionRouter.put("/", async (req: Request, res: Response) => {
     verifyMessage = "Add both an Access Token and Phone Number ID to connect."
   }
 
-  // Moving this journey onto a number must not clash with the trigger keywords
-  // of journeys already on it (checked under a per-number lock).
-  let conn
-  try {
-    ({ result: conn } = await guardKeywords(chatbotId, { phoneNumberId: effectivePhoneId }, () => upsertConnection(chatbotId, data)))
-  } catch (err) {
-    if (err instanceof KeywordConflictError) {
-      return res.status(409).json({ error: err.message, code: "KEYWORD_CONFLICT", conflicts: err.conflicts, saved: false })
-    }
-    throw err
-  }
+  const conn = await upsertConnection(chatbotId, data)
   // Log WHICH fields changed (never the secret values themselves).
   logActivity(req, "connection.update", {
     chatbotId,
@@ -179,10 +166,10 @@ connectionRouter.get("/meta-config", async (req: Request, res: Response) => {
 // last-known snapshot if Meta is unreachable. Never returns secrets.
 connectionRouter.get("/health", async (req: Request, res: Response) => {
   const bot = await getChatbot(req.params.chatbotId)
-  if (!bot) return res.status(404).json({ error: "Chatbot not found", code: "CHATBOT_NOT_FOUND" })
+  if (!bot) return res.status(404).json({ error: "Chatbot not found" })
 
   const health = await getConnectionHealth(req.params.chatbotId)
-  if (!health) return res.status(404).json({ error: "No Connection Configured", code: "NOT_CONFIGURED" })
+  if (!health) return res.status(404).json({ error: "No Connection Configured" })
 
   return res.json(health)
 })
@@ -209,9 +196,6 @@ connectionRouter.post("/embedded-signup", async (req: Request, res: Response) =>
     logActivity(req, "connection.embedded_signup", { chatbotId, details: { phoneNumber: conn.phoneNumber } })
     return res.json(ToSafeConnection(conn))
   } catch (err) {
-    if (err instanceof KeywordConflictError) {
-      return res.status(409).json({ error: err.message, code: "KEYWORD_CONFLICT", conflicts: err.conflicts })
-    }
     if (err instanceof EmbeddedSignupError) {
       console.error("Embedded signup error:", err.message, err.detail)
       return res.status(502).json({ error: err.message })

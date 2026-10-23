@@ -65,7 +65,11 @@ const envSchema = z.object({
   // JWT-authenticated browser frontend does NOT use this.
   BACKEND_API_KEY: z.string().optional(),
 
-
+  // --- Media storage (Supabase Storage) ---
+  // Inbound WhatsApp media (photos/videos/docs a user sends to a Question) is
+  // downloaded from Meta and uploaded to a Supabase Storage bucket so the file
+  // survives (Meta media ids expire in ~5 days). When unset, we fall back to
+  // storing just the Meta media id/metadata (no durable file).
   SUPABASE_URL: z.string().optional(),
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),   // backend-only; never exposed
   SUPABASE_MEDIA_BUCKET: z.string().default("wa-media"),
