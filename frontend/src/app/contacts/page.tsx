@@ -289,6 +289,13 @@ export default function ContactsPage() {
                                 <p className="font-body-md text-body-md text-on-surface-variant">Manage phone contacts, trigger dynamic segments, and monitor audience opt-ins for automated WhatsApp journeys.</p>
                             </div>
                             <div className="flex items-center gap-2.5 flex-wrap">
+                                <Link
+                                    href="/contacts/explorer"
+                                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-surface-container-lowest text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-all shadow-sm font-label-md text-label-md"
+                                >
+                                    <span className="material-symbols-outlined text-[18px]">explore</span>
+                                    <span>Open Explorer</span>
+                                </Link>
                                 <button className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-surface-container-lowest text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-all shadow-sm font-label-md text-label-md">
                                     <span className="material-symbols-outlined text-[18px]">upload_file</span>
                                     <span>Import CSV</span>
@@ -454,7 +461,13 @@ export default function ContactsPage() {
                                                                     {initialsOf(contact.name) || "?"}
                                                                 </div>
                                                                 <div>
-                                                                    <span className="font-label-lg text-label-lg text-on-surface font-semibold block leading-tight">{contact.name}</span>
+                                                                    <Link
+                                                                        href={`/contacts/explorer?contact=${contact.id}`}
+                                                                        className="font-label-lg text-label-lg text-on-surface font-semibold block leading-tight hover:text-primary hover:underline transition-colors"
+                                                                        title="Open in Conversation Explorer"
+                                                                    >
+                                                                        {contact.name}
+                                                                    </Link>
                                                                     {contact.notes && (
                                                                         <span className="font-body-sm text-body-sm text-on-surface-variant line-clamp-1">{contact.notes}</span>
                                                                     )}

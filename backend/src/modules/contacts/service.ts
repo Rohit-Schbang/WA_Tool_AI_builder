@@ -100,3 +100,138 @@ export async function syncContactFromCustomerVars(
     await prisma.contact.update({ where: { phone: trimmedPhone }, data: { name: newName } });
     return true;
 }
+
+// ---------------------------------------------------------------------------
+// Explorer: a contact's conversations across all chatbots.
+//
+// The Contacts Explorer screen is organised around a Contact, but the runtime
+// stores chat history per Conversation (chatbotId + waUserId). There is no
+// "journey" entity — a chatbot (and the workflow version it runs) IS the
+// journey here. We join Conversation.waUserId to the contact's phone to list
+// every conversation that contact has had, grouped so the UI can offer a
+// "Journey" (= chatbot) switcher.
+//
+// Phone/waUserId formats can differ (a stored contact may be "+91 99677 22208"
+// while WhatsApp sends "919967722208"), so we match on a digits-only key and
+// also try the exact value.
+// ---------------------------------------------------------------------------
+
+// Reduce a phone/waId to just its digits for tolerant matching.
+function digitsOnly(value: string): string {
+    return String(value ?? "").replace(/\D/g, "");
+}
+
+// Resolve a human-friendly node label from a workflow definition JSON, given a
+// node id. Falls back to the id itself (or null) when it can't be found. The
+// definition shape is { nodes: [{ id, nodeType, seq, config:{ name } }], ... }.
+function nodeLabelFromDefinition(definition: unknown, nodeId: string | null): string | null {
+    if (!nodeId) return null;
+    const def = definition as { nodes?: Array<Record<string, any>> } | null;
+    const nodes = Array.isArray(def?.nodes) ? def!.nodes : [];
+    const node = nodes.find((n) => n?.id === nodeId);
+    if (!node) return nodeId;
+    const name = String(node?.config?.name ?? "").trim();
+    if (name) return name;
+    const type = String(node?.nodeType ?? "node");
+    return node?.seq != null ? `${type} ${node.seq}` : type;
+}
+
+export interface ContactConversationSummary {
+    id: string;
+    chatbotId: string;
+    chatbotName: string;
+    status: string;
+    currentNodeId: string | null;
+    currentNodeLabel: string | null;
+    variables: unknown;
+    messageCount: number;
+    createdAt: Date;
+    lastMessageAt: Date | null;
+    messages: Array<{
+        id: string;
+        direction: string;
+        messageType: string;
+        content: unknown;
+        status: string | null;
+        createdAt: Date;
+    }>;
+}
+
+// Returns null when the contact doesn't exist; otherwise the contact plus an
+// array of its conversations (newest activity first), each with its full
+// message history and the chatbot ("journey") it belongs to.
+export async function getContactConversations(
+    contactId: string
+): Promise<{ contact: { id: string; name: string; phone: string; tags: string[]; notes: string | null }; conversations: ContactConversationSummary[] } | null> {
+    const contact = await prisma.contact.findUnique({ where: { id: contactId } });
+    if (!contact) return null;
+
+    const phoneDigits = digitsOnly(contact.phone);
+
+    // Match on exact waUserId or the digits-only form. We fetch a candidate set
+    // by exact + "contains digits" is not possible on a formatted column, so we
+    // pull conversations whose waUserId equals the raw phone or its digits, then
+    // also filter in JS on the digits key to catch any formatting differences.
+    const candidates = await prisma.conversation.findMany({
+        where: {
+            OR: [
+                { waUserId: contact.phone },
+                { waUserId: phoneDigits },
+            ],
+        },
+        orderBy: { updatedAt: "desc" },
+        include: {
+            chatbot: { select: { id: true, name: true } },
+            workflowVersion: { select: { definition: true } },
+            messages: { orderBy: { createdAt: "asc" } },
+        },
+    });
+
+    // Defensive second pass: in case neither exact form matched but a
+    // differently-formatted waUserId shares the same digits, scan broadly only
+    // when the targeted query found nothing (keeps the common path cheap).
+    let rows = candidates;
+    if (rows.length === 0 && phoneDigits) {
+        const all = await prisma.conversation.findMany({
+            orderBy: { updatedAt: "desc" },
+            include: {
+                chatbot: { select: { id: true, name: true } },
+                workflowVersion: { select: { definition: true } },
+                messages: { orderBy: { createdAt: "asc" } },
+            },
+        });
+        rows = all.filter((c) => digitsOnly(c.waUserId) === phoneDigits);
+    }
+
+    const conversations: ContactConversationSummary[] = rows.map((c) => ({
+        id: c.id,
+        chatbotId: c.chatbotId,
+        chatbotName: c.chatbot?.name ?? "Unknown bot",
+        status: c.status,
+        currentNodeId: c.currentNodeId,
+        currentNodeLabel: nodeLabelFromDefinition(c.workflowVersion?.definition ?? null, c.currentNodeId),
+        variables: c.variables,
+        messageCount: c.messages.length,
+        createdAt: c.createdAt,
+        lastMessageAt: c.lastMessageAt,
+        messages: c.messages.map((m) => ({
+            id: m.id,
+            direction: m.direction,
+            messageType: m.messageType,
+            content: m.content,
+            status: m.status,
+            createdAt: m.createdAt,
+        })),
+    }));
+
+    return {
+        contact: {
+            id: contact.id,
+            name: contact.name,
+            phone: contact.phone,
+            tags: contact.tags,
+            notes: contact.notes,
+        },
+        conversations,
+    };
+}
