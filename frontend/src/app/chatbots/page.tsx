@@ -254,7 +254,6 @@ export default function ChatbotsPage() {
 
                         {/* 2. Quick launch */}
                         <div className="p-space-lg rounded-2xl bg-surface-container-lowest shadow-sm relative overflow-hidden flex flex-col lg:flex-row items-start lg:items-center justify-between gap-space-md">
-                            <div className="absolute -right-12 -top-12 w-48 h-48 rounded-full bg-gradient-to-br from-primary-fixed/20 to-secondary-fixed/30 blur-2xl pointer-events-none"></div>
                             <div className="flex flex-col gap-2 max-w-xl w-full">
                                 <div className="flex items-center gap-2">
                                     <span className="material-symbols-outlined text-primary text-[20px]">bolt</span>
@@ -415,7 +414,7 @@ export default function ChatbotsPage() {
                                                             checked={bot.isActive}
                                                             onChange={() => handleToggleActive(bot.id, bot.isActive)}
                                                         />
-                                                        <div className="w-10 h-6 bg-surface-container-highest peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
+                                                        <div className="w-10 h-6 !bg-slate-300 dark:!bg-slate-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:!bg-teal-600 dark:peer-checked:!bg-teal-400"></div>
                                                     </label>
                                                     <button
                                                         onClick={() => handleRename(bot.id, bot.name)}

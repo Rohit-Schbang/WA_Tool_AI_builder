@@ -1768,24 +1768,24 @@ function BuilderInner() {
               onClick={() => autoLayout("TB")}
               className={`px-2.5 py-1 rounded-md flex items-center space-x-1.5 transition text-xs ${
                 layoutDir === "TB"
-                  ? "bg-white font-semibold text-slate-900 shadow-2xs"
-                  : "font-medium text-slate-500 hover:text-slate-800"
+                  ? "bg-white dark:bg-[#334155] font-semibold text-[#0f172a] dark:text-[#f8fafc] shadow-2xs"
+                  : "font-semibold text-[#334155] dark:!text-[#1e3a8a] hover:text-[#0f172a]"
               }`}
               title="Arrange vertically"
             >
-              <i className={`ph-bold ph-arrows-down-up text-xs ${layoutDir === "TB" ? "text-brand-600" : "text-slate-400"}`} />
+              <i className={`ph-bold ph-arrows-down-up text-xs ${layoutDir === "TB" ? "text-brand-600 dark:text-[#5eead4]" : "text-[#475569] dark:!text-[#1e3a8a]"}`} />
               <span>Vertical</span>
             </button>
             <button
               onClick={() => autoLayout("LR")}
               className={`px-2.5 py-1 rounded-md flex items-center space-x-1.5 transition text-xs ${
                 layoutDir === "LR"
-                  ? "bg-white font-semibold text-slate-900 shadow-2xs"
-                  : "font-medium text-slate-500 hover:text-slate-800"
+                  ? "bg-white dark:bg-[#334155] font-semibold text-[#0f172a] dark:text-[#f8fafc] shadow-2xs"
+                  : "font-semibold text-[#334155] dark:!text-[#1e3a8a] hover:text-[#0f172a]"
               }`}
               title="Arrange horizontally"
             >
-              <i className={`ph ph-arrows-left-right text-xs ${layoutDir === "LR" ? "text-brand-600" : "text-slate-400"}`} />
+              <i className={`ph ph-arrows-left-right text-xs ${layoutDir === "LR" ? "text-brand-600 dark:text-[#5eead4]" : "text-[#475569] dark:!text-[#1e3a8a]"}`} />
               <span>Horizontal</span>
             </button>
           </div>
@@ -1793,39 +1793,39 @@ function BuilderInner() {
           <div className="flex items-center space-x-1.5">
             <button
               onClick={() => setShowVarList(true)}
-              className="px-2.5 py-1 rounded-lg font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-transparent hover:border-slate-200 transition flex items-center space-x-1.5 text-xs"
+              className="px-2.5 py-1 rounded-lg font-medium text-slate-600 dark:!text-slate-200 hover:text-slate-900 dark:hover:!text-white hover:bg-slate-100 border border-transparent hover:border-slate-200 transition flex items-center space-x-1.5 text-xs"
             >
-              <i className="ph ph-brackets-curly text-brand-600 text-sm" />
+              <i className="ph ph-brackets-curly text-brand-600 dark:!text-[#5eead4] text-sm" />
               <span>Variables ({variables.length})</span>
             </button>
             <button
               onClick={() => setShowApiCfg(true)}
-              className="px-2.5 py-1 rounded-lg font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-transparent hover:border-slate-200 transition flex items-center space-x-1.5 text-xs"
+              className="px-2.5 py-1 rounded-lg font-medium text-slate-600 dark:!text-slate-200 hover:text-slate-900 dark:hover:!text-white hover:bg-slate-100 border border-transparent hover:border-slate-200 transition flex items-center space-x-1.5 text-xs"
             >
-              <i className="ph ph-plugs-connected text-brand-600 text-sm" />
+              <i className="ph ph-plugs-connected text-brand-600 dark:!text-[#5eead4] text-sm" />
               <span>API Configs ({apiConfigs.length})</span>
             </button>
             <button
               onClick={() => { setVersionError(""); setShowVersions(true); loadVersions(); }}
-              className="px-2.5 py-1 rounded-lg font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-transparent hover:border-slate-200 transition flex items-center space-x-1.5 text-xs"
+              className="px-2.5 py-1 rounded-lg font-medium text-slate-600 dark:!text-slate-200 hover:text-slate-900 dark:hover:!text-white hover:bg-slate-100 border border-transparent hover:border-slate-200 transition flex items-center space-x-1.5 text-xs"
             >
-              <i className="ph ph-clock-counter-clockwise text-brand-600 text-sm" />
+              <i className="ph ph-clock-counter-clockwise text-brand-600 dark:!text-[#5eead4] text-sm" />
               <span>Versions ({versionsInfo?.versions.length ?? 0})</span>
             </button>
             <button
               onClick={() => setShowReports(true)}
-              className="px-2.5 py-1 rounded-lg font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-transparent hover:border-slate-200 transition flex items-center space-x-1.5 text-xs"
+              className="px-2.5 py-1 rounded-lg font-medium text-slate-600 dark:!text-slate-200 hover:text-slate-900 dark:hover:!text-white hover:bg-slate-100 border border-transparent hover:border-slate-200 transition flex items-center space-x-1.5 text-xs"
               title="Saved AI build reports"
             >
-              <i className="ph ph-seal-check text-brand-600 text-sm" />
+              <i className="ph ph-seal-check text-brand-600 dark:!text-[#5eead4] text-sm" />
               <span>Reports ({reportCount})</span>
             </button>
             <button
               onClick={handleExportJson}
-              className="px-2.5 py-1 rounded-lg font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-transparent hover:border-slate-200 transition flex items-center space-x-1.5 text-xs"
+              className="px-2.5 py-1 rounded-lg font-medium text-slate-600 dark:!text-slate-200 hover:text-slate-900 dark:hover:!text-white hover:bg-slate-100 border border-transparent hover:border-slate-200 transition flex items-center space-x-1.5 text-xs"
               title="Export this journey as a JSON file"
             >
-              <i className="ph ph-download-simple text-brand-600 text-sm" />
+              <i className="ph ph-download-simple text-brand-600 dark:!text-[#5eead4] text-sm" />
               <span>Export JSON</span>
             </button>
           </div>
@@ -1916,12 +1916,12 @@ function BuilderInner() {
             </div>
           ))}
         </div>
-        <div className="p-3 border-t border-slate-100 bg-slate-50/80 text-[11px] text-slate-500 flex items-center justify-between shrink-0">
+        <div className="p-3 border-t border-slate-100 text-[11px] text-slate-500 dark:!text-slate-300 flex items-center justify-between shrink-0">
           <span className="flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full bg-emerald-500" />
             Meta Graph v20.0
           </span>
-          <span className="font-mono text-slate-400">99.99% SLA</span>
+          <span className="font-mono text-slate-400 dark:!text-slate-300">99.99% SLA</span>
         </div>
       </aside>
 
