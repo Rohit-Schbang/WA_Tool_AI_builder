@@ -59,13 +59,15 @@ connectionRouter.get("/", async (req: Request, res: Response) => {
 
   const bot = await getChatbot(chatbotId)
 
-  if (!bot) return res.status(404).json({ error: "Chatbot not found" })
+  // Distinguish "this journey was deleted" from "no number connected yet" so
+  // the settings page can stop polling and say so.
+  if (!bot) return res.status(404).json({ error: "Chatbot not found", code: "CHATBOT_NOT_FOUND" })
 
   const connection = await getConnection(chatbotId)
 
   // Getting connection ----->>>>>
 
-  if (!connection) return res.status(404).json({ error: "No Connection Configured" })
+  if (!connection) return res.status(404).json({ error: "No Connection Configured", code: "NOT_CONFIGURED" })
 
   return res.json(ToSafeConnection(connection))
 
@@ -177,10 +179,10 @@ connectionRouter.get("/meta-config", async (req: Request, res: Response) => {
 // last-known snapshot if Meta is unreachable. Never returns secrets.
 connectionRouter.get("/health", async (req: Request, res: Response) => {
   const bot = await getChatbot(req.params.chatbotId)
-  if (!bot) return res.status(404).json({ error: "Chatbot not found" })
+  if (!bot) return res.status(404).json({ error: "Chatbot not found", code: "CHATBOT_NOT_FOUND" })
 
   const health = await getConnectionHealth(req.params.chatbotId)
-  if (!health) return res.status(404).json({ error: "No Connection Configured" })
+  if (!health) return res.status(404).json({ error: "No Connection Configured", code: "NOT_CONFIGURED" })
 
   return res.json(health)
 })

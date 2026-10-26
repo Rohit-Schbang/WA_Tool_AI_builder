@@ -21,6 +21,14 @@ interface Health {
   checkedAt: string | null;
   live: boolean;
   error: string | null;
+  // Raw Graph API reply behind these values (only present on a live fetch).
+  meta?: {
+    request: string;
+    fetchedAt: string;
+    response: Record<string, unknown>;
+    extraResponse: Record<string, unknown> | null;
+    extraError: string | null;
+  } | null;
 }
 
 const POLL_MS = 60_000; // refresh once a minute while the page is open
@@ -44,7 +52,10 @@ function verificationStyle(s: string | null) {
   const v = (s ?? "").toUpperCase();
   if (v === "VERIFIED" || v === "APPROVED") return "text-emerald-700";
   if (v.includes("PENDING")) return "text-amber-700";
-  if (v === "EXPIRED" || v === "DECLINED" || v === "NOT_VERIFIED") return "text-rose-700";
+  // EXPIRED = the number's one-time registration code lapsed. The number is
+  // still registered and sending, so show it as "review", not as a failure.
+  if (v === "EXPIRED") return "text-amber-700";
+  if (v === "DECLINED" || v === "NOT_VERIFIED") return "text-rose-700";
   return "text-slate-600";
 }
 
@@ -75,6 +86,8 @@ export function ConnectionHealth({
   const [notConfigured, setNotConfigured] = useState(false);
   // Request failed (network / server) — shown instead of silently vanishing.
   const [loadError, setLoadError] = useState("");
+  // The journey itself was deleted (e.g. in another tab) — stop polling.
+  const [deleted, setDeleted] = useState(false);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
   const onHealthRef = useRef(onHealth);
   onHealthRef.current = onHealth;
@@ -88,7 +101,13 @@ export function ConnectionHealth({
       setLoadError("");
       onHealthRef.current?.(res.data);
     } catch (err: any) {
-      if (err.response?.status === 404) { setNotConfigured(true); setLoadError(""); }
+      const data = err.response?.data;
+      if (err.response?.status === 404 && (data?.code === "CHATBOT_NOT_FOUND" || data?.error === "Chatbot not found")) {
+        setDeleted(true);
+        setLoadError("");
+        if (timer.current) { clearInterval(timer.current); timer.current = null; }
+      }
+      else if (err.response?.status === 404) { setNotConfigured(true); setLoadError(""); }
       // Keep the last good snapshot on screen; just note the failure.
       else setLoadError(err.response?.data?.error ?? "Couldn't refresh number health.");
     } finally {
@@ -147,6 +166,14 @@ export function ConnectionHealth({
 
       {loading ? (
         <div className="h-24 rounded-xl bg-slate-50 border border-slate-100 animate-pulse" role="status" aria-label="Loading number health" />
+      ) : deleted ? (
+        <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-4 text-xs text-rose-700 flex items-center justify-between gap-2">
+          <span className="flex items-center gap-1.5">
+            <i className="ph-bold ph-trash" aria-hidden="true"></i>
+            This chatbot has been deleted, so there’s no number health to show.
+          </span>
+          <a href="/chatbots" className="font-semibold underline shrink-0">Back to chatbots</a>
+        </div>
       ) : notConfigured || (!health && !loadError) || (health && !hasCredentials) ? (
         <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-center text-xs text-slate-500">
           <i className="ph ph-plug text-2xl text-slate-300 block mb-1" aria-hidden="true"></i>
@@ -227,6 +254,33 @@ export function ConnectionHealth({
               <i className="ph-bold ph-warning-circle" aria-hidden="true"></i>
               Showing last-known status — {health.error}
             </div>
+          )}
+
+          {(health?.codeVerificationStatus ?? "").toUpperCase() === "EXPIRED" && (
+            <p className="text-[11px] text-slate-500">
+              <strong className="text-amber-700">Verification EXPIRED</strong> means the one-time code used to register this number has
+              lapsed. The number stays registered and keeps sending messages; it only matters if you re-register or move the number.
+            </p>
+          )}
+
+          {/* Exactly what Meta returned, so the values above can be checked */}
+          {health?.meta && (
+            <details className="rounded-lg border border-slate-200 bg-slate-50 text-[11px]">
+              <summary className="cursor-pointer select-none px-2.5 py-1.5 font-semibold text-slate-600">Meta response</summary>
+              <div className="px-2.5 pb-2.5 space-y-1.5">
+                <div className="font-mono text-slate-500 break-all">{health.meta.request}</div>
+                <pre className="font-mono text-slate-800 bg-white border border-slate-200 rounded p-2 overflow-x-auto whitespace-pre-wrap break-all">
+                  {JSON.stringify(health.meta.response, null, 2)}
+                </pre>
+                {health.meta.extraResponse && (
+                  <pre className="font-mono text-slate-800 bg-white border border-slate-200 rounded p-2 overflow-x-auto whitespace-pre-wrap break-all">
+                    {JSON.stringify(health.meta.extraResponse, null, 2)}
+                  </pre>
+                )}
+                {health.meta.extraError && <div className="text-slate-400">Extra details unavailable: {health.meta.extraError}</div>}
+                <div className="text-slate-400">Fetched {new Date(health.meta.fetchedAt).toLocaleString()}</div>
+              </div>
+            </details>
           )}
         </>
       )}

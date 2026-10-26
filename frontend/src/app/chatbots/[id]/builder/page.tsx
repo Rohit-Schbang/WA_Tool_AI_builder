@@ -36,6 +36,7 @@ import { WA_LIMITS } from "@/lib/waLimits";
 import { downloadJson, journeyFileName, wrapJourneyExport } from "@/lib/exportJourney";
 import { ContentMode } from "./ContentMode";
 import { KeywordConflictDialog } from "./KeywordConflictDialog";
+import { ActivationConflictDialog } from "@/app/chatbots/ActivationConflictDialog";
 import { normalizeKeyword, type KeywordConflict } from "@/lib/keywords";
 
 // Map React Flow node type name -> our custom component.
@@ -357,6 +358,9 @@ function BuilderInner() {
   const [keywordChecking, setKeywordChecking] = useState(false);
   // Clashes this journey's CURRENT keywords already have (shown on the Start block).
   const [startClashes, setStartClashes] = useState<KeywordConflict[]>([]);
+  // Switching this journey on clashes with an ACTIVE journey's keyword.
+  const [activationConflict, setActivationConflict] = useState<KeywordConflict[] | null>(null);
+  const [activationBusy, setActivationBusy] = useState(false);
 
   // Show a clash from a rejected save (409 KEYWORD_CONFLICT) in the dialog.
   // Returns true if the error was a keyword clash.
@@ -709,8 +713,10 @@ function BuilderInner() {
         try {
           const res = await api.patch(`/api/chatbots/${chatbotId}/activate`, { isActive: true });
           setIsActive(res.data.isActive);
-        } catch {
-          setIsActive(true);
+        } catch (err: any) {
+          // Published, but another ACTIVE journey on this number shares a
+          // trigger keyword — ask before switching anything off.
+          if (!showActivationConflictFrom(err)) setPublishMsg(`Published v${response.data.version}, but couldn't activate`);
         }
       }
     } catch (error: any) {
@@ -746,9 +752,34 @@ function BuilderInner() {
       const res = await api.patch(`/api/chatbots/${chatbotId}/activate`, { isActive: !isActive });
       setIsActive(res.data.isActive);
     } catch (error) {
-      /* ignore */
+      showActivationConflictFrom(error);
     } finally {
       setActivating(false);
+    }
+  }
+
+  // 409 from /activate: another ACTIVE journey on this number shares a keyword.
+  function showActivationConflictFrom(err: any): boolean {
+    const data = err?.response?.data;
+    if (err?.response?.status !== 409 || data?.code !== "KEYWORD_CONFLICT") return false;
+    setActivationConflict(data.conflicts ?? []);
+    return true;
+  }
+
+  // Alert action: switch the clashing journey(s) off and activate this one.
+  async function activateReplacingConflicts() {
+    setActivationBusy(true);
+    try {
+      const res = await api.patch(`/api/chatbots/${chatbotId}/activate`, { isActive: true, deactivateConflicting: true });
+      setIsActive(res.data.isActive);
+      const off: { name: string }[] = res.data.deactivated ?? [];
+      setPublishMsg(off.length ? `Activated · switched off ${off.map((o) => `“${o.name}”`).join(", ")}` : "Activated");
+      setActivationConflict(null);
+    } catch {
+      setPublishMsg("Couldn't activate");
+      setActivationConflict(null);
+    } finally {
+      setActivationBusy(false);
     }
   }
 
@@ -3537,6 +3568,23 @@ function BuilderInner() {
             setKeywordConflict(null);
             setKeywordDraft(""); // drop the duplicate keyword
           }}
+        />
+      )}
+
+      {/* Switching on clashes with an active journey's trigger keyword */}
+      {activationConflict && (
+        <ActivationConflictDialog
+          journeyName={botName || "this journey"}
+          conflicts={activationConflict}
+          busy={activationBusy}
+          onDeactivateOthers={activateReplacingConflicts}
+          onEditKeywords={() => {
+            setActivationConflict(null);
+            setContentMode(false);
+            const start = nodes.find((n) => n.data.nodeType === "START");
+            if (start) focusNode(start.id);
+          }}
+          onCancel={() => setActivationConflict(null)}
         />
       )}
 
