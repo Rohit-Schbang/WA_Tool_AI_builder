@@ -360,12 +360,43 @@ html.dark .bg-surface,
 html.dark .bg-surface-bright,
 html.dark .bg-background { background-color: #0f172a !important; }
 html.dark .bg-surface-container-lowest { background-color: #1e293b !important; }
+
+/* Translucent surface variants (e.g. the fixed top header uses
+   `bg-surface/85` with backdrop-blur). These generate their own classes
+   (.bg-surface\/85) that the solid rules above don't match, so the header
+   stayed light-grey in dark mode. Remap them to the dark app background while
+   keeping some translucency so the blur still reads. */
+html.dark [class*="bg-surface/"] { background-color: rgba(15, 23, 42, 0.85) !important; }      /* slate-900 */
+html.dark [class*="bg-surface-container-lowest/"] { background-color: rgba(30, 41, 59, 0.85) !important; } /* slate-800 */
 html.dark [class*="bg-surface-container-low"] { background-color: #182138 !important; }
 html.dark [class*="bg-surface-container-high"] { background-color: #26334d !important; }
 html.dark .bg-surface-container { background-color: #1f2a43 !important; }
+/* Opacity variant of bg-surface-container (e.g. the Explorer filter banner uses
+   bg-surface-container/60) — otherwise it falls back to a light grey strip. */
+html.dark [class*="bg-surface-container/"] { background-color: rgba(31, 42, 67, 0.6) !important; }
+
+/* Hover variants of the surface tokens. Table rows use
+   `hover:bg-surface-bright`, which generates a SEPARATE class
+   (.hover\:bg-surface-bright:hover) that the rules above don't match — so on
+   dark mode the hovered row turned near-white and its light text vanished.
+   Remap every hover surface variant to a dark "row highlight" instead. */
+/* Match EVERY hover surface variant — plain (hover:bg-surface-container) and
+   opacity suffixes (hover:bg-surface-container/50, used by the Contacts table
+   rows). The attribute-substring selector catches them all so a hovered row
+   only darkens slightly and its text stays readable, instead of going white. */
+html.dark [class*="hover:bg-surface"]:hover,
+html.dark [class*="hover:bg-background"]:hover,
+/* Hardcoded light hover fills (toolbar buttons use hover:bg-slate-100). Without
+   this they map to the near-black app background and text contrast breaks — use
+   the same subtle highlight so the label stays readable on hover. */
+html.dark .hover\:bg-slate-50:hover,
+html.dark .hover\:bg-slate-100:hover,
+html.dark .hover\:bg-slate-200:hover {
+  background-color: #263349 !important; /* subtle row highlight, text stays readable */
+}
 
 html.dark .text-on-surface { color: #f1f5f9 !important; }
-html.dark .text-on-surface-variant { color: #a9b4c4 !important; }
+html.dark .text-on-surface-variant { color: #c2ccd9 !important; } /* brightened for muted table text */
 html.dark .text-on-background { color: #f1f5f9 !important; }
 /* Brand text tokens: brighten so they pop on dark tiles. */
 html.dark .text-primary { color: #5eead4 !important; }   /* teal -> bright teal */
@@ -449,3 +480,27 @@ html.dark .shadow-lg,
 html.dark .shadow-2xl {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(148, 163, 184, 0.08) !important;
 }
+
+/* ---- M3 "fixed" accent chips (status pills, mono template chips) --------
+   Tokens like bg-primary-fixed / text-on-primary-fixed-variant were authored
+   for light mode: a pale tint background with very dark text. On a dark card
+   that dark text became near-invisible (the Broadcasts "In Progress" badge,
+   template-name chips, etc.). Remap the chip backgrounds to translucent brand
+   tints and their on-* text to bright readable colors. Opacity variants
+   (e.g. bg-primary-fixed/40) are matched with the attribute selectors. */
+html.dark [class*="bg-primary-fixed"] { background-color: rgba(13, 148, 136, 0.22) !important; }
+html.dark [class*="bg-secondary-fixed"] { background-color: rgba(249, 115, 22, 0.22) !important; }
+html.dark [class*="bg-tertiary-fixed"] { background-color: rgba(14, 165, 233, 0.22) !important; }
+
+html.dark .text-on-primary-fixed,
+html.dark .text-on-primary-fixed-variant { color: #5eead4 !important; }   /* bright teal */
+html.dark .text-on-secondary-fixed,
+html.dark .text-on-secondary-fixed-variant { color: #fdba74 !important; } /* soft amber */
+html.dark .text-on-tertiary-fixed,
+html.dark .text-on-tertiary-fixed-variant { color: #7dd3fc !important; }  /* sky */
+
+/* ---- Outline (dim) text: icons, chevrons, helper glyphs ----------------
+   `outline` (#6d7a77) / `outline-variant` are too dark against a dark surface;
+   lift them to a mid slate so search icons and dropdown arrows stay visible. */
+html.dark .text-outline { color: #94a3b8 !important; }       /* slate-400 */
+html.dark .text-outline-variant { color: #64748b !important; } /* slate-500 */
