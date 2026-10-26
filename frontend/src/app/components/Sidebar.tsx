@@ -2,10 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
-import { api } from "@/lib/api";
-import { getToken } from "@/lib/auth";
 import { ThemeToggle } from "./ThemeToggle";
+import { useCurrentUser } from "@/lib/currentUser";
 
 // The single, shared workspace sidebar used across all dashboard pages.
 // The highlighted item is derived from the current URL so it's always
@@ -32,7 +30,7 @@ function sectionFromPath(pathname: string | null): SidebarItem {
   if (pathname.startsWith("/broadcasts")) return "broadcasts";
   if (pathname.startsWith("/templates")) return "templates";
   // Per-bot sub-pages that have their own sidebar entry.
-  if (/^\/chatbots\/[^/]+\/settings/.test(pathname)) return "settings";
+  if (pathname.startsWith("/settings")) return "settings";
   if (/^\/chatbots\/[^/]+\/analytics/.test(pathname)) return "analytics";
   // Everything else under /chatbots (list, builder, conversations) is "workflows".
   return "workflows";
@@ -52,18 +50,8 @@ export function Sidebar({ active }: { active?: SidebarItem }) {
   const current: SidebarItem =
     fromPath === "settings" || fromPath === "analytics" ? fromPath : active ?? fromPath;
   const currentBotId = botIdFromPath(pathname);
-  const [firstBotId, setFirstBotId] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!getToken()) return;
-    api
-      .get("/api/chatbots")
-      .then((res) => {
-        const bots = res.data;
-        if (Array.isArray(bots) && bots.length > 0) setFirstBotId(bots[0].id);
-      })
-      .catch(() => {});
-  }, []);
+  // Settings is only listed for admins (hidden while loading too).
+  const canAccessSettings = useCurrentUser()?.canAccessSettings === true;
 
   const items: NavEntry[] = [
     { key: "workflows", label: "Workflows & Bots", icon: "account_tree", href: "/chatbots" },
@@ -71,7 +59,7 @@ export function Sidebar({ active }: { active?: SidebarItem }) {
     { key: "contacts", label: "Contacts", icon: "group", href: "/contacts" },
     { key: "analytics", label: "Analytics", icon: "analytics" },
     { key: "templates", label: "Templates", icon: "chat_bubble", href: "/templates" },
-    { key: "settings", label: "Settings", icon: "settings" },
+    ...(canAccessSettings ? [{ key: "settings" as const, label: "Settings", icon: "settings" }] : []),
   ];
 
   function renderItem(item: NavEntry) {
@@ -81,11 +69,9 @@ export function Sidebar({ active }: { active?: SidebarItem }) {
     const activeCls = "bg-primary-container text-on-primary-container dark:bg-teal-600 dark:text-white font-semibold shadow-sm";
     const idleCls = "text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100";
 
-    // Settings is per-chatbot: the bot you're currently on, else the newest
-    // bot, else disabled.
     let href = item.href;
-    const botId = currentBotId ?? firstBotId;
-    if (item.key === "settings") href = botId ? `/chatbots/${botId}/settings` : undefined;
+    // Settings is workspace-level (one master WhatsApp connection).
+    if (item.key === "settings") href = "/settings";
     if (item.key === "analytics" && currentBotId) href = `/chatbots/${currentBotId}/analytics`;
 
     const inner = (
