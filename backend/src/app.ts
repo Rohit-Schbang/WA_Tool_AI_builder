@@ -86,7 +86,8 @@ export function createApp() {
   app.use("/api/chatbots", apiLimiter, chatbotsRouter);
   app.use("/api/chatbots/:chatbotId/workflow", apiLimiter, workflowsRouter);
   app.use("/api/chatbots/:chatbotId/conversations", apiLimiter, conversationsRouter);
-  app.use("/api/chatbots/:chatbotId/connection", apiLimiter, connectionRouter);
+  // ONE master WhatsApp connection for the whole workspace (admin-only).
+  app.use("/api/whatsapp/connection", apiLimiter, connectionRouter);
   app.use("/api/whatsapp", webhookRouter);
   app.use("/api/contacts", apiLimiter, contactsRouter);
   app.use("/api/activity", apiLimiter, activityRouter);

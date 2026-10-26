@@ -10,6 +10,7 @@ import { LoggingAdapter } from "../messaging/loggingAdapters.js";
 import { storeInboundMedia } from "../messaging/mediaStore.js";
 import { ensureContactForWaUser, syncContactFromCustomerVars } from "../contacts/service.js";
 import { seedCustomerVars, contactPatchFromVars, CUSTOMER_NAME } from "../runtime/customerVars.js";
+import { getSendingCredentials } from "../whatsapp/connection/service.js";
 
 // The web tester talks to the engine as "web-test" or "web-test-<session>"
 // (see testPanel.tsx startOver). Those aren't real WhatsApp numbers, so we never
@@ -35,7 +36,7 @@ function seedVariableDefaults(definition: WorkflowDefinition): Record<string, an
 // #16 — decide whether an inbound message should trigger the workflow.
 // If the START node defines keywords, the message must match per matchType.
 // No keywords configured => always trigger (backward compatible).
-function matchesTrigger(startNode: WorkflowNode | undefined, text: string): boolean {
+export function matchesTrigger(startNode: WorkflowNode | undefined, text: string): boolean {
     const cfg = startNode?.config ?? {};
     const keywords: string[] = Array.isArray(cfg.keywords) ? cfg.keywords : [];
     if (keywords.length === 0) return true;
@@ -204,9 +205,10 @@ export async function handleInboundMessage(
     // URL rather than a Meta media id that expires. Best-effort: on any failure
     // we keep the original metadata so the answer is never dropped.
     if (inboundMedia?.id && ["image", "video", "audio", "document"].includes(inboundType)) {
-        const conn = await prisma.connection.findUnique({ where: { chatbotId }, select: { accessToken: true } });
-        if (conn?.accessToken) {
-            inboundMedia = await storeInboundMedia(inboundMedia, inboundType, conn.accessToken, chatbotId);
+        // The workspace's master connection token downloads the media.
+        const creds = await getSendingCredentials();
+        if (creds) {
+            inboundMedia = await storeInboundMedia(inboundMedia, inboundType, creds.accessToken, chatbotId);
         }
     }
 

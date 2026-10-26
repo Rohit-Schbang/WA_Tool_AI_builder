@@ -1,7 +1,6 @@
 import { config } from "../../../infra/config.js";
-import { getConnection, upsertConnection } from "./service.js";
+import { getConnection, upsertConnection, MASTER_KEY, type MasterConnection } from "./service.js";
 import { prisma } from "../../../infra/prisma.js";
-import type { Connection } from "@prisma/client";
 
 // WhatsApp Embedded Signup (Meta) — server-side flow.
 //
@@ -249,9 +248,9 @@ export async function getPhoneStatus(
 
 // Orchestrates the full flow and persists the result. Returns the raw Connection.
 export async function completeEmbeddedSignup(
-  chatbotId: string,
-  input: EmbeddedSignupInput
-): Promise<Connection> {
+  input: EmbeddedSignupInput,
+  adminEmail: string
+): Promise<MasterConnection> {
   if (!isEmbeddedSignupConfigured()) {
     throw new EmbeddedSignupError(
       "WhatsApp Embedded Signup is not configured on the server yet. Add the Meta app credentials to enable it."
@@ -271,7 +270,8 @@ export async function completeEmbeddedSignup(
   const owner = await getTokenOwner(accessToken);
 
   // Persist. accessToken here is the BISU token used to send messages.
-  return upsertConnection(chatbotId, {
+  return upsertConnection({
+    updatedByEmail: adminEmail,
     accessToken,
     wabaId: input.wabaId,
     phoneNumberId: input.phoneNumberId,
@@ -310,7 +310,7 @@ export interface ConnectionHealth {
   error: string | null;                   // set when the live fetch failed (cached shown)
 }
 
-function healthFromRow(c: Connection, live: boolean, error: string | null): ConnectionHealth {
+function healthFromRow(c: MasterConnection, live: boolean, error: string | null): ConnectionHealth {
   return {
     connected: c.status === "CONNECTED",
     status: c.status,
@@ -327,10 +327,14 @@ function healthFromRow(c: Connection, live: boolean, error: string | null): Conn
   };
 }
 
-// Fetch (and cache) the live health for a chatbot's connection. Returns null
+// Fetch (and cache) the live health for the master connection. Returns null
 // only when there is no connection row at all.
-export async function getConnectionHealth(chatbotId: string): Promise<ConnectionHealth | null> {
-  const conn = await getConnection(chatbotId);
+//
+// This NEVER downgrades or clears the connection: if Meta rejects the token,
+// the stored credentials and status stay as the admin left them and the
+// problem is reported in `error`. Only an admin save / disconnect changes it.
+export async function getConnectionHealth(): Promise<ConnectionHealth | null> {
+  const conn = await getConnection();
   if (!conn) return null;
 
   // No credentials → nothing to poll; return the stored snapshot.
@@ -345,8 +349,8 @@ export async function getConnectionHealth(chatbotId: string): Promise<Connection
     const s = await getPhoneStatus(conn.phoneNumberId, conn.accessToken);
     // Persist the fresh values so the last-known snapshot survives token/network
     // failures on a later call.
-    const updated = await prisma.connection.update({
-      where: { chatbotId },
+    const updated = await prisma.workspaceConnection.update({
+      where: { key: MASTER_KEY },
       data: {
         status: "CONNECTED",
         qualityRating: s.quality ?? conn.qualityRating,
@@ -360,8 +364,8 @@ export async function getConnectionHealth(chatbotId: string): Promise<Connection
     if (!updated.systemUserId) {
       const owner = await getTokenOwner(conn.accessToken).catch(() => ({} as { id?: string; name?: string }));
       if (owner.id) {
-        const withOwner = await prisma.connection.update({
-          where: { chatbotId },
+        const withOwner = await prisma.workspaceConnection.update({
+          where: { key: MASTER_KEY },
           data: { systemUserId: owner.id, systemUserName: owner.name ?? null },
         });
         return healthFromRow(withOwner, true, null);
@@ -370,12 +374,9 @@ export async function getConnectionHealth(chatbotId: string): Promise<Connection
     return healthFromRow(updated, true, null);
   } catch (err) {
     const code = graphErrorCode(err);
-    // Only a definitive answer from Meta (token invalid / id unknown) marks the
-    // connection broken; network blips keep the last-known status.
-    if ((code === 190 || code === 100) && conn.status !== "ERROR") {
-      const updated = await prisma.connection.update({ where: { chatbotId }, data: { status: "ERROR" } });
-      return healthFromRow(updated, false, code === 190 ? "The access token is invalid or expired. Reconnect to Meta." : "Meta doesn't recognise this Phone Number ID for this token.");
-    }
+    // Report, but don't touch the stored connection (see note above).
+    if (code === 190) return healthFromRow(conn, false, "Meta says the access token is invalid or expired. An admin should save a new token.");
+    if (code === 100) return healthFromRow(conn, false, "Meta doesn't recognise this Phone Number ID for this token.");
     // Live fetch failed — surface the cached values with an error note so the
     // dashboard can show "last checked …" instead of going blank.
     const msg = err instanceof EmbeddedSignupError ? err.message : "Couldn't reach Meta for a live status.";

@@ -5,6 +5,7 @@ import { WhatsAppAdapter, ConsoleAdapter } from "../messaging/adapters.js";
 import { LoggingAdapter } from "../messaging/loggingAdapters.js";
 import type { MessagingAdapter } from "../runtime/types.js";
 import { waitUntilKey } from "../runtime/executors.js";
+import { getSendingCredentials } from "../whatsapp/connection/service.js";
 
 // #11-adjacent (no-reply fallback): a lightweight in-process sweeper that
 // periodically finds conversations stuck WAITING_FOR_INPUT past their node's
@@ -19,11 +20,10 @@ let timer: NodeJS.Timeout | null = null;
 
 // Build the right outbound adapter for a chatbot (real WhatsApp if connected,
 // else a no-op console adapter so the fallback still advances the flow).
-async function buildAdapter(chatbotId: string): Promise<MessagingAdapter> {
-  const conn = await prisma.connection.findUnique({ where: { chatbotId } });
-  if (conn?.phoneNumberId && conn?.accessToken && conn.status === "CONNECTED") {
-    return new WhatsAppAdapter(conn.phoneNumberId, conn.accessToken);
-  }
+// Every journey sends through the workspace's master connection.
+async function buildAdapter(_chatbotId: string): Promise<MessagingAdapter> {
+  const creds = await getSendingCredentials();
+  if (creds) return new WhatsAppAdapter(creds.phoneNumberId, creds.accessToken);
   return new ConsoleAdapter();
 }
 
