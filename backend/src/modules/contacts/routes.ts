@@ -1,7 +1,7 @@
 import { Request, Response, Router } from "express";
 import { requireAuth } from "../auth/middleware";
 import z from "zod";
-import { createContact, deleteContact, listContacts, updateContact } from "./service";
+import { createContact, deleteContact, listContacts, updateContact, getContactConversations } from "./service";
 
 
 export const contactsRouter = Router()
@@ -37,6 +37,19 @@ contactsRouter.post("/", async (req: Request, res: Response) => {
     } catch (error: any) {
         if (error.code === "P2002") return res.status(409).json({ error: "A contact with same phone exists" })
         console.error("Create Contact Error:", error)
+        return res.status(500).json({ error: "Internal Server error" })
+    }
+})
+
+// GET / api/ contacts/:id/conversations  --------->>>> A contact's chat history
+// across all chatbots ("journeys"). Powers the Contacts Explorer screen.
+contactsRouter.get("/:id/conversations", async (req: Request, res: Response) => {
+    try {
+        const result = await getContactConversations(req.params.id)
+        if (!result) return res.status(404).json({ error: "Contact not found" })
+        return res.json(result)
+    } catch (error) {
+        console.error("Get Contact Conversations Error:", error)
         return res.status(500).json({ error: "Internal Server error" })
     }
 })
