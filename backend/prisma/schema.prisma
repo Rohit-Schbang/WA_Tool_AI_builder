@@ -131,6 +131,43 @@ model Connection {
   updatedAt      DateTime @updatedAt
 }
 
+// ---------------------------------------------------------------------------
+// The workspace's ONE master WhatsApp (Meta) connection, shared by every
+// journey. Not linked to any chatbot, so creating, importing or deleting a
+// journey never touches it. Only SETTINGS_ADMIN_EMAILS can change or
+// disconnect it. Singleton row: key = "master".
+// (The per-journey `Connection` table above is legacy and no longer read.)
+// ---------------------------------------------------------------------------
+model WorkspaceConnection {
+  id             String   @id @default(cuid())
+  key            String   @unique @default("master")
+
+  businessName   String?
+  phoneNumber    String?
+  phoneNumberId  String?
+  wabaId         String?
+  systemUserId   String?
+  systemUserName String?
+  status         ConnectionStatus @default(DISCONNECTED)
+
+  qualityRating          String?
+  codeVerificationStatus String?
+  nameStatus             String?
+  healthCheckedAt        DateTime?
+
+  // Secret fields — backend only, never returned to the client
+  accessToken    String?
+  appId          String?
+  appSecret      String?
+  verifyToken    String?
+
+  // Audit: who last changed it (an admin email).
+  updatedByEmail String?
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
 enum ConnectionStatus {
   DISCONNECTED
   CONNECTED

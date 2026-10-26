@@ -1,12 +1,18 @@
 import { prisma } from "../../../infra/prisma.js";
-import type { Connection } from "@prisma/client";
+import type { WorkspaceConnection } from "@prisma/client";
 
-//  This field allows the frontend to see. Notice: NO AccessToken, appSecret, verifyToken or App ID.
-//  Those never leave backend.
+// The workspace has ONE master WhatsApp (Meta) connection shared by every
+// journey. It isn't linked to a chatbot, so creating / importing / deleting a
+// journey never changes it. Only an admin (SETTINGS_ADMIN_EMAILS) can update
+// or disconnect it via the connection routes.
 
+export const MASTER_KEY = "master";
+
+export type MasterConnection = WorkspaceConnection;
+
+// Fields the frontend may see. NO accessToken, appSecret, verifyToken or App ID.
 export interface SafeConnection {
     id: string;
-    chatbotId: string;
     businessName: string | null;
     phoneNumber: string | null;
     phoneNumberId: string | null;
@@ -17,12 +23,13 @@ export interface SafeConnection {
     hasAccessToken: boolean;
     hasAppSecret: boolean;
     hasVerifyToken: boolean;
+    updatedAt: string;
+    updatedByEmail: string | null;
 }
 
-export function ToSafeConnection(c: Connection): SafeConnection {
+export function ToSafeConnection(c: MasterConnection): SafeConnection {
     return {
         id: c.id,
-        chatbotId: c.chatbotId,
         businessName: c.businessName,
         phoneNumber: c.phoneNumber,
         phoneNumberId: c.phoneNumberId,
@@ -30,15 +37,15 @@ export function ToSafeConnection(c: Connection): SafeConnection {
         systemUserId: c.systemUserId,
         systemUserName: c.systemUserName,
         status: c.status,
-        hasAccessToken: c.accessToken !== null && c.accessToken !== "",
-        hasAppSecret: c.appSecret !== null && c.appSecret !== "",
-        hasVerifyToken: c.verifyToken !== null && c.verifyToken !== ""
+        hasAccessToken: !!c.accessToken,
+        hasAppSecret: !!c.appSecret,
+        hasVerifyToken: !!c.verifyToken,
+        updatedAt: c.updatedAt.toISOString(),
+        updatedByEmail: c.updatedByEmail,
     }
 }
 
-
-// The data a caller can send when saving a connection.
-// All optional so they can update just some fields.
+// The data a caller can send when saving the connection. All optional.
 export interface ConnectionInput {
     businessName?: string | null;
     phoneNumber?: string | null;
@@ -51,30 +58,51 @@ export interface ConnectionInput {
     appSecret?: string | null;
     verifyToken?: string | null;
     status?: "DISCONNECTED" | "CONNECTED" | "ERROR";
+    updatedByEmail?: string | null;
 }
 
-// Getting raw-connection for a chatbot (may be null if never configured).
-//  Return the FULL row (with secrets) - callers must use toSafeConnection
-// before sending it to the client
-
-export async function getConnection(chatbotId: string): Promise<Connection | null> {
-    return prisma.connection.findUnique({ where: { chatbotId } })
+// The full master row (with secrets) — callers must use ToSafeConnection
+// before sending it to a client. Null if never configured.
+export async function getConnection(): Promise<MasterConnection | null> {
+    return prisma.workspaceConnection.findUnique({ where: { key: MASTER_KEY } })
 }
 
-// Create and update the connection for a chatbot (upsert)
-// upsert = update if it exists, otherwise create
+// Credentials needed to send / receive, or null if not usable. Deliberately
+// ignores `status`: a stored token keeps working until an admin changes it.
+export async function getSendingCredentials(): Promise<{ phoneNumberId: string; accessToken: string } | null> {
+    const c = await getConnection()
+    if (!c?.accessToken || !c.phoneNumberId) return null
+    return { phoneNumberId: c.phoneNumberId, accessToken: c.accessToken }
+}
 
-export async function upsertConnection(
-    chatbotId: string,
-    input: ConnectionInput
-): Promise<Connection> {
-    return prisma.connection.upsert({
-        where: { chatbotId },
-        update: {
-            ...input
+export async function upsertConnection(input: ConnectionInput): Promise<MasterConnection> {
+    return prisma.workspaceConnection.upsert({
+        where: { key: MASTER_KEY },
+        update: { ...input },
+        create: { key: MASTER_KEY, ...input },
+    })
+}
+
+// Explicit admin disconnect: wipes the credentials. The ONLY code path that
+// removes a working connection.
+export async function disconnectConnection(adminEmail: string): Promise<MasterConnection | null> {
+    const existing = await getConnection()
+    if (!existing) return null
+    return prisma.workspaceConnection.update({
+        where: { key: MASTER_KEY },
+        data: {
+            status: "DISCONNECTED",
+            accessToken: null,
+            appSecret: null,
+            appId: null,
+            verifyToken: null,
+            systemUserId: null,
+            systemUserName: null,
+            qualityRating: null,
+            codeVerificationStatus: null,
+            nameStatus: null,
+            healthCheckedAt: null,
+            updatedByEmail: adminEmail,
         },
-        create: {
-            chatbotId, ...input
-        }
     })
 }

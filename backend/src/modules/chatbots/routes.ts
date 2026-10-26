@@ -5,7 +5,6 @@ import z from "zod";
 import { createChatbot, createChatbotWithDraft, deleteChatBot, getChatbot, listChatbots, renameChatBot, setChatbotActivate } from "./service.js";
 import { logActivity } from "../activity/service.js";
 import { parseImport } from "../workflows/importer.js";
-import { guardActivation, KeywordConflictError } from "../triggers/guard.js";
 import type { Prisma } from "@prisma/client";
 
 export const chatbotsRouter = Router();
@@ -21,12 +20,7 @@ chatbotsRouter.use(requireAuth)
 
 const creationSchema = z.object({ name: z.string().trim().min(1).max(100) })
 const renameSchema = z.object({ name: z.string().trim().min(1).max(100) })
-const isActiveSchema = z.object({
-  isActive: z.boolean(),
-  // Switch off the ACTIVE journeys on the same number that share a trigger
-  // keyword with this one, then activate it (the alert's "Deactivate & activate").
-  deactivateConflicting: z.boolean().optional().default(false),
-})
+const isActiveSchema = z.object({ isActive: z.boolean() })
 
 //  POST --->  Create chatbot
 chatbotsRouter.post("/", async (req: Request, res: Response) => {
@@ -94,37 +88,10 @@ chatbotsRouter.patch("/:id/activate", async (req: Request, res: Response) => {
   const parsed = isActiveSchema.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: "Invalid input" })
 
-  // Deactivating is always allowed.
-  if (!parsed.data.isActive) {
-    const bot = await setChatbotActivate(req.params.id, false)
-    if (!bot) return res.status(404).json({ error: "ChatBot Not Found" })
-    logActivity(req, "chatbot.deactivate", { chatbotId: bot.id })
-    return res.status(200).json(bot)
-  }
-
-  // Activating: two ACTIVE journeys on one number must not share a trigger
-  // keyword (checked under a per-number lock).
-  const existing = await getChatbot(req.params.id)
-  if (!existing) return res.status(404).json({ error: "ChatBot Not Found" })
-  try {
-    const { deactivated, notConnected } = await guardActivation(existing.id, parsed.data.deactivateConflicting)
-    for (const d of deactivated) {
-      logActivity(req, "chatbot.deactivate", { chatbotId: d.chatbotId, details: { reason: `trigger keyword clash with "${existing.name}"` } })
-    }
-    logActivity(req, "chatbot.activate", { chatbotId: existing.id })
-    const bot = await getChatbot(existing.id)
-    return res.status(200).json({ ...bot, deactivated, notConnected })
-  } catch (err) {
-    if (err instanceof KeywordConflictError) {
-      return res.status(409).json({
-        error: "Another active journey on this phone number uses the same trigger keyword.",
-        code: "KEYWORD_CONFLICT",
-        scope: "activation",
-        conflicts: err.conflicts,
-      })
-    }
-    throw err
-  }
+  const bot = await setChatbotActivate(req.params.id, parsed.data.isActive)
+  if (!bot) return res.status(404).json({ error: "ChatBot Not Found" })
+  logActivity(req, parsed.data.isActive ? "chatbot.activate" : "chatbot.deactivate", { chatbotId: bot.id })
+  return res.status(200).json(bot)
 })
 
 // DELETE -----------> Chatbot Deletion

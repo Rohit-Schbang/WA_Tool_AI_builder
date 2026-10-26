@@ -44,11 +44,6 @@ export function createApp() {
       // No Origin header = server-to-server / curl / Meta webhook → allow.
       origin: (origin, cb) => cb(null, !origin || allowedOrigins.includes(normalizeOrigin(origin))),
       credentials: true,
-      // Let the browser cache the CORS preflight (the automatic OPTIONS request
-      // before each cross-origin call with an Authorization header) for 2 hours,
-      // instead of sending one before every request. Browsers cap this
-      // (Chrome at 2h), so a larger value wouldn't help.
-      maxAge: 7200,
     }),
   );
   // Parse JSON request bodies into req.body. The `verify` hook also stashes the
@@ -91,7 +86,8 @@ export function createApp() {
   app.use("/api/chatbots", apiLimiter, chatbotsRouter);
   app.use("/api/chatbots/:chatbotId/workflow", apiLimiter, workflowsRouter);
   app.use("/api/chatbots/:chatbotId/conversations", apiLimiter, conversationsRouter);
-  app.use("/api/chatbots/:chatbotId/connection", apiLimiter, connectionRouter);
+  // ONE master WhatsApp connection for the whole workspace (admin-only).
+  app.use("/api/whatsapp/connection", apiLimiter, connectionRouter);
   app.use("/api/whatsapp", webhookRouter);
   app.use("/api/contacts", apiLimiter, contactsRouter);
   app.use("/api/activity", apiLimiter, activityRouter);
@@ -105,23 +101,7 @@ export function createApp() {
   // --- Central error handler ---
   // Express recognizes this as an error handler because it has 4 args.
   // Any error thrown in a route ends up here.
-  app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
-    // A body that claims to be JSON but isn't (e.g. a GET sent with
-    // "Content-Type: application/json" and a blank body). That's the
-    // client's mistake — answer 400, not 500.
-    if (err?.type === "entity.parse.failed") {
-      console.warn(`[http] invalid JSON body on ${req.method} ${req.path}`);
-      return res.status(400).json({
-        error: "The request body isn't valid JSON. Send valid JSON, or for GET requests send no body and no \"Content-Type: application/json\" header.",
-        code: "INVALID_JSON",
-      });
-    }
-    // Other errors the body parser marks as safe to show (e.g. 413 body too
-    // large) keep their own 4xx status and message.
-    const status = Number(err?.status ?? err?.statusCode);
-    if (err?.expose && status >= 400 && status < 500) {
-      return res.status(status).json({ error: err.message });
-    }
+  app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     console.error("Unhandled error:", err);
     res.status(500).json({ error: "Internal server error" });
   });

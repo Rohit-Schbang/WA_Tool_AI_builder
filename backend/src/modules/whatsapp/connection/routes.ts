@@ -1,26 +1,21 @@
 
 import { Request, Response, Router } from "express";
 import { z } from "zod";
-import { getChatbot } from "../../chatbots/service.js";
-import { requireAuth } from "../../auth/middleware.js";
+import { requireAuth, requireSettingsAdmin } from "../../auth/middleware.js";
 import { logActivity } from "../../activity/service.js";
-import { getConnection, ToSafeConnection, upsertConnection, type ConnectionInput } from "./service.js";
+import { disconnectConnection, getConnection, ToSafeConnection, upsertConnection, type ConnectionInput } from "./service.js";
 import { config } from "../../../infra/config.js";
 import { completeEmbeddedSignup, isEmbeddedSignupConfigured, EmbeddedSignupError, getConnectionHealth, verifyManualCredentials } from "./embeddedSignup.js";
-import { guardKeywords, KeywordConflictError } from "../../triggers/guard.js";
-export const whatsappRouter = Router();
 
+// The workspace's master WhatsApp connection, mounted at
+// /api/whatsapp/connection. One connection for every journey; it is NOT tied
+// to a chatbot, so journey create/import/delete never affects it.
+export const connectionRouter = Router()
 
-// Using " mergeparams " which lets this router to read :chatbotID from the paraent path
-//  when we mount it under /api/chatbots/:chatbotId/connection
-
-export const connectionRouter = Router({ mergeParams: true })
-
-// SECURITY: every connection route reads/writes WhatsApp credentials, so it
-// must require a signed-in user (previously missing — the routes were open).
+// SECURITY: every route reads/writes WhatsApp credentials. Signed-in users on
+// the SETTINGS_ADMIN_EMAILS list only (others get 403).
 connectionRouter.use(requireAuth)
-
-// Client may sent the optional updates 
+connectionRouter.use(requireSettingsAdmin)
 
 // Blank = "leave unchanged" (never overwrite a saved value with ""). Each field
 // is format-checked so a browser autofill (e.g. an email or login password
@@ -49,42 +44,16 @@ function firstIssue(err: z.ZodError): { field?: string; message: string } {
   return { field: i?.path?.[0] as string | undefined, message: i?.message ?? "Invalid input" }
 }
 
-//  GET -------->>>>> api/chatbots/:chatbotId/connection
-
-connectionRouter.get("/", async (req: Request, res: Response) => {
-
-  const chatbotId = req.params.chatbotId
-
-  // getting chatbot of the current user ownership ----------->>>>>
-
-  const bot = await getChatbot(chatbotId)
-
-  // Distinguish "this journey was deleted" from "no number connected yet" so
-  // the settings page can stop polling and say so.
-  if (!bot) return res.status(404).json({ error: "Chatbot not found", code: "CHATBOT_NOT_FOUND" })
-
-  const connection = await getConnection(chatbotId)
-
-  // Getting connection ----->>>>>
-
-  if (!connection) return res.status(404).json({ error: "No Connection Configured", code: "NOT_CONFIGURED" })
-
+// GET ---> /api/whatsapp/connection
+connectionRouter.get("/", async (_req: Request, res: Response) => {
+  const connection = await getConnection()
+  if (!connection) return res.status(404).json({ error: "No Connection Configured" })
   return res.json(ToSafeConnection(connection))
-
 })
 
-// PUT --------->>>>> api/chatbots/:chatbotId/connection
-
+// PUT ---> /api/whatsapp/connection  (manual setup)
 connectionRouter.put("/", async (req: Request, res: Response) => {
-
-  const chatbotId = req.params.chatbotId
-
-  const bot = await getChatbot(chatbotId)
-
-  if (!bot) return res.status(404).json({ error: "Chatbot not found" })
-
   const parsed = connectionSchema.safeParse(req.body)
-
   if (!parsed.success) {
     const issue = firstIssue(parsed.error)
     return res.status(400).json({ error: issue.message, field: issue.field, details: parsed.error.flatten() })
@@ -101,7 +70,7 @@ connectionRouter.put("/", async (req: Request, res: Response) => {
 
   // Effective token + phone number id after this save (blank secret fields keep
   // the stored value). With both, verify against Meta.
-  const existing = await getConnection(chatbotId)
+  const existing = await getConnection()
   const effectiveToken = data.accessToken ?? existing?.accessToken ?? null
   const effectivePhoneId = data.phoneNumberId ?? existing?.phoneNumberId ?? null
   const credentialsChanged =
@@ -115,55 +84,46 @@ connectionRouter.put("/", async (req: Request, res: Response) => {
       data.status = "CONNECTED"
       if (info.systemUserId) data.systemUserId = info.systemUserId
       if (info.systemUserName) data.systemUserName = info.systemUserName
-      // Backfill display fields from Meta if the user didn't type them.
+      // Backfill display fields from Meta if the admin didn't type them.
       if (!data.phoneNumber && info.displayPhoneNumber) data.phoneNumber = info.displayPhoneNumber
       if (!data.businessName && info.verifiedName) data.businessName = info.verifiedName
     } catch (err) {
       const message = err instanceof EmbeddedSignupError ? err.message : "Could not verify these credentials with Meta."
-      // New credentials that Meta rejects are NOT saved — the existing (maybe
-      // working) connection stays exactly as it was.
+      // New credentials that Meta rejects are NOT saved — the existing
+      // connection stays exactly as it was.
       if (credentialsChanged) {
         return res.status(422).json({ error: message, status: existing?.status ?? "DISCONNECTED", saved: false })
       }
-      data.status = "ERROR"
-      verifyMessage = message
+      // Same credentials, other fields edited: save those, but keep the
+      // current status (a failed check never drops the connection).
+      verifyMessage = `Saved, but Meta couldn't confirm the connection right now: ${message}`
     }
   } else {
-    // Not enough to be connected yet.
     data.status = "DISCONNECTED"
     verifyMessage = "Add both an Access Token and Phone Number ID to connect."
   }
 
-  // Moving this journey onto a number must not clash with the trigger keywords
-  // of journeys already on it (checked under a per-number lock).
-  let conn
-  try {
-    ({ result: conn } = await guardKeywords(chatbotId, { phoneNumberId: effectivePhoneId }, () => upsertConnection(chatbotId, data)))
-  } catch (err) {
-    if (err instanceof KeywordConflictError) {
-      return res.status(409).json({ error: err.message, code: "KEYWORD_CONFLICT", conflicts: err.conflicts, saved: false })
-    }
-    throw err
-  }
+  const conn = await upsertConnection({ ...data, updatedByEmail: req.userEmail ?? null })
   // Log WHICH fields changed (never the secret values themselves).
   logActivity(req, "connection.update", {
-    chatbotId,
-    details: { fields: Object.keys(parsed.data).filter((k) => (parsed.data as any)[k] !== undefined), status: conn.status },
+    details: { fields: Object.keys(data).filter((k) => k !== "status"), status: conn.status },
   })
   return res.json({ ...ToSafeConnection(conn), verifyMessage })
-
-
 })
 
-// GET ---> api/chatbots/:chatbotId/connection/meta-config
-// Public-safe config the frontend needs to initialise the Facebook JS SDK for
-// Embedded Signup. Returns ONLY the app id + config id + graph version (never
-// the app secret). `enabled` tells the UI whether to show the "Connect with
-// Facebook" button or fall back to manual entry.
-connectionRouter.get("/meta-config", async (req: Request, res: Response) => {
-  const bot = await getChatbot(req.params.chatbotId)
-  if (!bot) return res.status(404).json({ error: "Chatbot not found" })
+// DELETE ---> /api/whatsapp/connection
+// Explicit admin disconnect: the only way a working connection is removed.
+connectionRouter.delete("/", async (req: Request, res: Response) => {
+  const conn = await disconnectConnection(req.userEmail!)
+  if (!conn) return res.status(404).json({ error: "No Connection Configured" })
+  logActivity(req, "connection.disconnect", { details: { phoneNumber: conn.phoneNumber } })
+  return res.json(ToSafeConnection(conn))
+})
 
+// GET ---> /api/whatsapp/connection/meta-config
+// Public-safe config for the Facebook JS SDK (Embedded Signup). Never the app
+// secret. `enabled` tells the UI whether to show "Continue with Meta".
+connectionRouter.get("/meta-config", (_req: Request, res: Response) => {
   return res.json({
     enabled: isEmbeddedSignupConfigured(),
     appId: config.META_APP_ID ?? null,
@@ -173,23 +133,16 @@ connectionRouter.get("/meta-config", async (req: Request, res: Response) => {
   })
 })
 
-// GET ---> api/chatbots/:chatbotId/connection/health
-// Live number health for the dashboard (quality rating, verification, display
-// name). Fetches fresh values from Meta and caches them; falls back to the
-// last-known snapshot if Meta is unreachable. Never returns secrets.
-connectionRouter.get("/health", async (req: Request, res: Response) => {
-  const bot = await getChatbot(req.params.chatbotId)
-  if (!bot) return res.status(404).json({ error: "Chatbot not found", code: "CHATBOT_NOT_FOUND" })
-
-  const health = await getConnectionHealth(req.params.chatbotId)
-  if (!health) return res.status(404).json({ error: "No Connection Configured", code: "NOT_CONFIGURED" })
-
+// GET ---> /api/whatsapp/connection/health
+// Live number health (quality rating, verification, display name). Never
+// returns secrets and never changes the saved connection on failure.
+connectionRouter.get("/health", async (_req: Request, res: Response) => {
+  const health = await getConnectionHealth()
+  if (!health) return res.status(404).json({ error: "No Connection Configured" })
   return res.json(health)
 })
 
-// POST ---> api/chatbots/:chatbotId/connection/embedded-signup
-// Completes Meta Embedded Signup: exchanges the short-lived code for a token,
-// provisions the WABA + phone number, and stores the credentials.
+// POST ---> /api/whatsapp/connection/embedded-signup
 const embeddedSignupSchema = z.object({
   code: z.string().min(1),
   wabaId: z.string().min(1),
@@ -197,21 +150,14 @@ const embeddedSignupSchema = z.object({
 })
 
 connectionRouter.post("/embedded-signup", async (req: Request, res: Response) => {
-  const chatbotId = req.params.chatbotId
-  const bot = await getChatbot(chatbotId)
-  if (!bot) return res.status(404).json({ error: "Chatbot not found" })
-
   const parsed = embeddedSignupSchema.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: "Invalid inputs", details: parsed.error.flatten() })
 
   try {
-    const conn = await completeEmbeddedSignup(chatbotId, parsed.data)
-    logActivity(req, "connection.embedded_signup", { chatbotId, details: { phoneNumber: conn.phoneNumber } })
+    const conn = await completeEmbeddedSignup(parsed.data, req.userEmail!)
+    logActivity(req, "connection.embedded_signup", { details: { phoneNumber: conn.phoneNumber } })
     return res.json(ToSafeConnection(conn))
   } catch (err) {
-    if (err instanceof KeywordConflictError) {
-      return res.status(409).json({ error: err.message, code: "KEYWORD_CONFLICT", conflicts: err.conflicts })
-    }
     if (err instanceof EmbeddedSignupError) {
       console.error("Embedded signup error:", err.message, err.detail)
       return res.status(502).json({ error: err.message })

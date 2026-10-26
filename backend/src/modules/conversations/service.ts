@@ -10,7 +10,7 @@ import { LoggingAdapter } from "../messaging/loggingAdapters.js";
 import { storeInboundMedia } from "../messaging/mediaStore.js";
 import { ensureContactForWaUser, syncContactFromCustomerVars } from "../contacts/service.js";
 import { seedCustomerVars, contactPatchFromVars, CUSTOMER_NAME } from "../runtime/customerVars.js";
-import { matchesStartNode } from "../triggers/keywords.js";
+import { getSendingCredentials } from "../whatsapp/connection/service.js";
 
 // The web tester talks to the engine as "web-test" or "web-test-<session>"
 // (see testPanel.tsx startOver). Those aren't real WhatsApp numbers, so we never
@@ -35,10 +35,22 @@ function seedVariableDefaults(definition: WorkflowDefinition): Record<string, an
 
 // #16 — decide whether an inbound message should trigger the workflow.
 // If the START node defines keywords, the message must match per matchType.
-// No keywords configured => always trigger (backward compatible). Uses the
-// shared keyword rules (case/space/trailing-punctuation insensitive).
-function matchesTrigger(startNode: WorkflowNode | undefined, text: string): boolean {
-    return matchesStartNode(startNode?.config, text);
+// No keywords configured => always trigger (backward compatible).
+export function matchesTrigger(startNode: WorkflowNode | undefined, text: string): boolean {
+    const cfg = startNode?.config ?? {};
+    const keywords: string[] = Array.isArray(cfg.keywords) ? cfg.keywords : [];
+    if (keywords.length === 0) return true;
+
+    const matchType: string = cfg.matchType ?? "contains";
+    const msg = (text ?? "").trim().toLowerCase();
+
+    return keywords.some((kw) => {
+        const k = String(kw).trim().toLowerCase();
+        if (!k) return false;
+        if (matchType === "exact") return msg === k;
+        if (matchType === "starts_with") return msg.startsWith(k);
+        return msg.includes(k); // "contains" (default)
+    });
 }
 
 export async function handleInboundMessage(
@@ -61,10 +73,7 @@ export async function handleInboundMessage(
     // to name a freshly auto-created Contact. Omitted by the web tester.
     // `simulateDelays` (web tester only): Delay blocks don't sleep on the server;
     // they're returned as markers so the test chat replays the pause.
-    // `forceRestart` (webhook router): the message is this journey's trigger
-    // keyword sent while the user was in a different journey on the same
-    // number — start this journey from the beginning.
-    opts: { bypassTrigger?: boolean; useDraft?: boolean; simulateDelays?: boolean; forceRestart?: boolean; profileName?: string | null; inbound?: { type: InboundType; media?: InboundMedia | null } } = {}
+    opts: { bypassTrigger?: boolean; useDraft?: boolean; simulateDelays?: boolean; profileName?: string | null; inbound?: { type: InboundType; media?: InboundMedia | null } } = {}
 ): Promise<{ status: string }> {
 
 
@@ -145,12 +154,9 @@ export async function handleInboundMessage(
     // keyword again (e.g. "Hi"): same conversation row, so the message history
     // is kept, but a fresh run from START on the current live version with
     // fresh variables. Any other message after the end is ignored as before.
-    // `forceRestart`: the router matched this journey's trigger keyword while
-    // the user was in ANOTHER journey on the same number, so start this one
-    // fresh even if an old, unfinished run of it was still waiting.
-    if (conversation.status === "COMPLETED" || conversation.status === "FAILED" || opts.forceRestart) {
+    if (conversation.status === "COMPLETED" || conversation.status === "FAILED") {
         const startNode = definition.nodes.find((node) => node.nodeType === "START");
-        if (!opts.bypassTrigger && !opts.forceRestart && !matchesTrigger(startNode, text)) {
+        if (!opts.bypassTrigger && !matchesTrigger(startNode, text)) {
             return { status: "conversation_completed" }
         }
         conversation = await prisma.conversation.update({
@@ -199,9 +205,10 @@ export async function handleInboundMessage(
     // URL rather than a Meta media id that expires. Best-effort: on any failure
     // we keep the original metadata so the answer is never dropped.
     if (inboundMedia?.id && ["image", "video", "audio", "document"].includes(inboundType)) {
-        const conn = await prisma.connection.findUnique({ where: { chatbotId }, select: { accessToken: true } });
-        if (conn?.accessToken) {
-            inboundMedia = await storeInboundMedia(inboundMedia, inboundType, conn.accessToken, chatbotId);
+        // The workspace's master connection token downloads the media.
+        const creds = await getSendingCredentials();
+        if (creds) {
+            inboundMedia = await storeInboundMedia(inboundMedia, inboundType, creds.accessToken, chatbotId);
         }
     }
 

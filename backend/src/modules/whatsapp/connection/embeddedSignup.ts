@@ -1,8 +1,6 @@
 import { config } from "../../../infra/config.js";
-import { getConnection, upsertConnection } from "./service.js";
-import { guardKeywords } from "../../triggers/guard.js";
+import { getConnection, upsertConnection, MASTER_KEY, type MasterConnection } from "./service.js";
 import { prisma } from "../../../infra/prisma.js";
-import type { Connection } from "@prisma/client";
 
 // WhatsApp Embedded Signup (Meta) — server-side flow.
 //
@@ -34,14 +32,9 @@ export class EmbeddedSignupError extends Error {
   }
 }
 
-// A real Meta id: digits only, and not a placeholder like "000000000000000".
-const isRealMetaId = (v?: string) => !!v && /^\d{5,25}$/.test(v.trim()) && !/^0+$/.test(v.trim());
-
 // True when the Meta credentials needed for embedded signup are configured.
-// Placeholder values count as "not configured", so the settings page falls
-// back to manual setup instead of opening a Meta popup that can only fail.
 export function isEmbeddedSignupConfigured(): boolean {
-  return Boolean(isRealMetaId(config.META_APP_ID) && config.META_APP_SECRET && isRealMetaId(config.META_CONFIG_ID));
+  return Boolean(config.META_APP_ID && config.META_APP_SECRET && config.META_CONFIG_ID);
 }
 
 async function graphFetch(url: string, init: RequestInit, step: string): Promise<any> {
@@ -236,78 +229,33 @@ function graphErrorCode(err: unknown): number | undefined {
 // Read the phone number's current platform + verification status. Used both at
 // connect time and by the periodic health check so the dashboard can show a
 // live "number status" like Gupshup/Wati do.
-export // Fields we always read for the health card. All are documented phone-number
-// fields; a field Meta doesn't know would fail the whole call (error 100).
-const PHONE_STATUS_FIELDS = "display_phone_number,verified_name,code_verification_status,name_status,quality_rating,platform_type";
-// Extra, purely informational fields shown in the raw "Meta response". Read in
-// a separate best-effort call so a field missing on an older Graph version or
-// account can never break the health check or mark the connection broken.
-const PHONE_EXTRA_FIELDS = "status,account_mode,messaging_limit_tier,is_official_business_account,throughput";
-
-// What Meta returned for the number, exactly as sent (no secrets: these are
-// public facts about the phone number), plus what we asked for.
-export interface MetaPhoneResponse {
-  request: string;                 // e.g. "GET /v22.0/{phone-number-id}?fields=…"
-  fetchedAt: string;
-  response: Record<string, unknown>;
-  extraResponse: Record<string, unknown> | null;  // best-effort extra fields
-  extraError: string | null;
-}
-
 export async function getPhoneStatus(
   phoneNumberId: string,
   token: string
-): Promise<{ status?: string; nameStatus?: string; quality?: string; displayPhoneNumber?: string; meta: MetaPhoneResponse }> {
+): Promise<{ status?: string; nameStatus?: string; quality?: string; displayPhoneNumber?: string }> {
   const data = await graphFetch(
-    `${GRAPH()}/${phoneNumberId}?fields=${PHONE_STATUS_FIELDS}`,
+    `${GRAPH()}/${phoneNumberId}?fields=display_phone_number,verified_name,code_verification_status,name_status,quality_rating,platform_type`,
     { headers: { Authorization: `Bearer ${token}` } },
     "Fetch phone status"
   );
-
-  let extraResponse: Record<string, unknown> | null = null;
-  let extraError: string | null = null;
-  try {
-    extraResponse = await graphFetch(
-      `${GRAPH()}/${phoneNumberId}?fields=${PHONE_EXTRA_FIELDS}`,
-      { headers: { Authorization: `Bearer ${token}` } },
-      "Fetch phone details"
-    );
-  } catch (err) {
-    extraError = err instanceof Error ? err.message : "Not available";
-  }
-
   return {
-    // code_verification_status only: the old fallback to platform_type
-    // ("CLOUD_API") put an unrelated value in the Verification box.
-    status: data?.code_verification_status,
+    status: data?.code_verification_status ?? data?.platform_type,
     nameStatus: data?.name_status,
     quality: data?.quality_rating,
     displayPhoneNumber: data?.display_phone_number,
-    meta: {
-      request: `GET /${config.META_GRAPH_VERSION}/${phoneNumberId}?fields=${PHONE_STATUS_FIELDS}`,
-      fetchedAt: new Date().toISOString(),
-      response: data ?? {},
-      extraResponse,
-      extraError,
-    },
   };
 }
 
 // Orchestrates the full flow and persists the result. Returns the raw Connection.
 export async function completeEmbeddedSignup(
-  chatbotId: string,
-  input: EmbeddedSignupInput
-): Promise<Connection> {
+  input: EmbeddedSignupInput,
+  adminEmail: string
+): Promise<MasterConnection> {
   if (!isEmbeddedSignupConfigured()) {
     throw new EmbeddedSignupError(
       "WhatsApp Embedded Signup is not configured on the server yet. Add the Meta app credentials to enable it."
     );
   }
-
-  // Fail fast — before any Meta calls — if this journey's trigger keywords
-  // clash with a journey already on that number (throws KeywordConflictError).
-  // It's checked again under the lock when the connection is saved below.
-  await guardKeywords(chatbotId, { phoneNumberId: input.phoneNumberId }, async () => true);
 
   const accessToken = await exchangeCodeForToken(input.code);
 
@@ -321,9 +269,9 @@ export async function completeEmbeddedSignup(
   await registerPhoneNumber(input.phoneNumberId, accessToken);
   const owner = await getTokenOwner(accessToken);
 
-  // Persist. accessToken here is the BISU token used to send messages. Saved
-  // under the per-number keyword lock so a clash can't appear meanwhile.
-  const { result } = await guardKeywords(chatbotId, { phoneNumberId: input.phoneNumberId }, () => upsertConnection(chatbotId, {
+  // Persist. accessToken here is the BISU token used to send messages.
+  return upsertConnection({
+    updatedByEmail: adminEmail,
     accessToken,
     wabaId: input.wabaId,
     phoneNumberId: input.phoneNumberId,
@@ -334,8 +282,7 @@ export async function completeEmbeddedSignup(
     appId: config.META_APP_ID,
     appSecret: config.META_APP_SECRET,
     status: "CONNECTED",
-  }));
-  return result;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -363,7 +310,7 @@ export interface ConnectionHealth {
   error: string | null;                   // set when the live fetch failed (cached shown)
 }
 
-function healthFromRow(c: Connection, live: boolean, error: string | null): ConnectionHealth {
+function healthFromRow(c: MasterConnection, live: boolean, error: string | null): ConnectionHealth {
   return {
     connected: c.status === "CONNECTED",
     status: c.status,
@@ -380,10 +327,14 @@ function healthFromRow(c: Connection, live: boolean, error: string | null): Conn
   };
 }
 
-// Fetch (and cache) the live health for a chatbot's connection. Returns null
+// Fetch (and cache) the live health for the master connection. Returns null
 // only when there is no connection row at all.
-export async function getConnectionHealth(chatbotId: string): Promise<ConnectionHealth | null> {
-  const conn = await getConnection(chatbotId);
+//
+// This NEVER downgrades or clears the connection: if Meta rejects the token,
+// the stored credentials and status stay as the admin left them and the
+// problem is reported in `error`. Only an admin save / disconnect changes it.
+export async function getConnectionHealth(): Promise<ConnectionHealth | null> {
+  const conn = await getConnection();
   if (!conn) return null;
 
   // No credentials → nothing to poll; return the stored snapshot.
@@ -398,8 +349,8 @@ export async function getConnectionHealth(chatbotId: string): Promise<Connection
     const s = await getPhoneStatus(conn.phoneNumberId, conn.accessToken);
     // Persist the fresh values so the last-known snapshot survives token/network
     // failures on a later call.
-    const updated = await prisma.connection.update({
-      where: { chatbotId },
+    const updated = await prisma.workspaceConnection.update({
+      where: { key: MASTER_KEY },
       data: {
         status: "CONNECTED",
         qualityRating: s.quality ?? conn.qualityRating,
@@ -413,8 +364,8 @@ export async function getConnectionHealth(chatbotId: string): Promise<Connection
     if (!updated.systemUserId) {
       const owner = await getTokenOwner(conn.accessToken).catch(() => ({} as { id?: string; name?: string }));
       if (owner.id) {
-        const withOwner = await prisma.connection.update({
-          where: { chatbotId },
+        const withOwner = await prisma.workspaceConnection.update({
+          where: { key: MASTER_KEY },
           data: { systemUserId: owner.id, systemUserName: owner.name ?? null },
         });
         return healthFromRow(withOwner, true, null);
@@ -423,12 +374,9 @@ export async function getConnectionHealth(chatbotId: string): Promise<Connection
     return healthFromRow(updated, true, null);
   } catch (err) {
     const code = graphErrorCode(err);
-    // Only a definitive answer from Meta (token invalid / id unknown) marks the
-    // connection broken; network blips keep the last-known status.
-    if ((code === 190 || code === 100) && conn.status !== "ERROR") {
-      const updated = await prisma.connection.update({ where: { chatbotId }, data: { status: "ERROR" } });
-      return healthFromRow(updated, false, code === 190 ? "The access token is invalid or expired. Reconnect to Meta." : "Meta doesn't recognise this Phone Number ID for this token.");
-    }
+    // Report, but don't touch the stored connection (see note above).
+    if (code === 190) return healthFromRow(conn, false, "Meta says the access token is invalid or expired. An admin should save a new token.");
+    if (code === 100) return healthFromRow(conn, false, "Meta doesn't recognise this Phone Number ID for this token.");
     // Live fetch failed — surface the cached values with an error note so the
     // dashboard can show "last checked …" instead of going blank.
     const msg = err instanceof EmbeddedSignupError ? err.message : "Couldn't reach Meta for a live status.";

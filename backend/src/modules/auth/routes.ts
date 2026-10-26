@@ -4,6 +4,8 @@ import { z } from "zod"
 import { registerUser, loginUser } from "./service.js";
 import { requireAuth } from "./middleware.js";
 import { allowedDomains, domainErrorMessage } from "./domain.js";
+import { isSettingsAdmin } from "./admins.js";
+import { prisma } from "../../infra/prisma.js";
 
 export const authRouter = Router();
 
@@ -80,6 +82,17 @@ authRouter.post("/login", async (req: Request, res: Response) => {
   }
 
 
+})
+
+// GET /api/auth/me — the signed-in user + what they may access. The frontend
+// uses `canAccessSettings` only to hide UI; the connection API enforces it.
+authRouter.get("/me", requireAuth, async (req: Request, res: Response) => {
+  const user = await prisma.user.findUnique({
+    where: { id: req.userId! },
+    select: { id: true, email: true, name: true },
+  })
+  if (!user) return res.status(401).json({ error: "Invalid or expired token" })
+  return res.json({ ...user, canAccessSettings: isSettingsAdmin(user.email) })
 })
 
 // GET /api/auth/config — public settings the login page needs: which email

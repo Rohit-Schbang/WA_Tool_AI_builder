@@ -65,7 +65,11 @@ const envSchema = z.object({
   // JWT-authenticated browser frontend does NOT use this.
   BACKEND_API_KEY: z.string().optional(),
 
-
+  // --- Media storage (Supabase Storage) ---
+  // Inbound WhatsApp media (photos/videos/docs a user sends to a Question) is
+  // downloaded from Meta and uploaded to a Supabase Storage bucket so the file
+  // survives (Meta media ids expire in ~5 days). When unset, we fall back to
+  // storing just the Meta media id/metadata (no durable file).
   SUPABASE_URL: z.string().optional(),
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),   // backend-only; never exposed
   SUPABASE_MEDIA_BUCKET: z.string().default("wa-media"),
@@ -74,6 +78,13 @@ const envSchema = z.object({
   // Comma-separated list of email domains allowed to sign up / log in.
   // Defaults to schbang.com.
   ALLOWED_EMAIL_DOMAINS: z.string().default("schbang.com"),
+
+  // --- Settings access ---
+  // Comma-separated list of emails allowed to view / change WhatsApp Settings
+  // (the per-chatbot connection page and its API). Everyone else gets 403.
+  SETTINGS_ADMIN_EMAILS: z
+    .string()
+    .default("aman.singh@schbang.com,deeraj.rajesh@schbang.com,khushi.saxena@schbang.com,rohit.sawant@schbang.com"),
 });
 
 const parsed = envSchema.safeParse(process.env);
