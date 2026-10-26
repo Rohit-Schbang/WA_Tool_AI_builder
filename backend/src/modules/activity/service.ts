@@ -17,7 +17,8 @@ export type ActivityAction =
   | "workflow.restore_version"
   | "workflow.ai_generate"
   | "connection.update"
-  | "connection.embedded_signup";
+  | "connection.embedded_signup"
+  | "connection.disconnect";
 
 interface LogOptions {
   chatbotId?: string;

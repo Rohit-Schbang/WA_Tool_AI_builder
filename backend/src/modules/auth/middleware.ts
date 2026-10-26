@@ -2,12 +2,14 @@ import { Request, Response, NextFunction } from "express";
 import { verifyToken } from "./jwt";
 import { prisma } from "../../infra/prisma.js";
 import { isAllowedEmail, domainErrorMessage } from "./domain.js";
+import { isSettingsAdmin, settingsForbiddenMessage } from "./admins.js";
 
 
 declare global {
     namespace Express {
         interface Request {
             userId?: string
+            userEmail?: string
         }
     }
 }
@@ -28,6 +30,7 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     const token = header.slice("Bearer ".length)
 
     let userId: string
+    let email: string
     try {
         userId = verifyToken(token).userId
     } catch {
@@ -40,10 +43,21 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
         // 401 (not 403) so the frontend's interceptor clears the session and
         // sends the user back to the login page.
         if (!isAllowedEmail(user.email)) return res.status(401).json({ error: domainErrorMessage })
+        email = user.email
     } catch (err) {
         return next(err)
     }
 
     req.userId = userId
+    req.userEmail = email
+    next()
+}
+
+// Use AFTER requireAuth. Only the emails in SETTINGS_ADMIN_EMAILS get through;
+// everyone else gets 403 (not 401, so they stay logged in).
+export function requireSettingsAdmin(req: Request, res: Response, next: NextFunction) {
+    if (!isSettingsAdmin(req.userEmail)) {
+        return res.status(403).json({ error: settingsForbiddenMessage, code: "SETTINGS_FORBIDDEN" })
+    }
     next()
 }

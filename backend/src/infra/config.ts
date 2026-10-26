@@ -78,6 +78,13 @@ const envSchema = z.object({
   // Comma-separated list of email domains allowed to sign up / log in.
   // Defaults to schbang.com.
   ALLOWED_EMAIL_DOMAINS: z.string().default("schbang.com"),
+
+  // --- Settings access ---
+  // Comma-separated list of emails allowed to view / change WhatsApp Settings
+  // (the per-chatbot connection page and its API). Everyone else gets 403.
+  SETTINGS_ADMIN_EMAILS: z
+    .string()
+    .default("aman.singh@schbang.com,deeraj.rajesh@schbang.com,khushi.saxena@schbang.com,rohit.sawant@schbang.com"),
 });
 
 const parsed = envSchema.safeParse(process.env);
