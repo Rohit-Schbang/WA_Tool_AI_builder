@@ -24,6 +24,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { Sidebar } from "@/app/components/Sidebar";
+import { TopNav } from "@/app/components/TopNav";
 
 // ---- Types (mirror the backend responses) --------------------------------
 
@@ -247,31 +248,15 @@ function ContactsExplorer() {
     <div className="bg-surface font-sans text-on-surface antialiased min-h-screen">
       <Sidebar active="contacts" />
 
-      <div className="pl-72 flex flex-col min-h-screen">
+      <div className="pl-sidebar flex flex-col min-h-screen">
         {/* Top header (matches the rest of the dashboard) */}
-        <header className="fixed top-0 left-72 right-0 h-16 bg-surface/85 backdrop-blur-xl shadow-[0_1px_8px_rgba(0,0,0,0.04)] z-40 flex items-center justify-between px-space-lg">
-          <div className="flex items-center gap-space-md">
-            <Link
-              href="/contacts"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high font-label-md text-label-md transition-all"
-            >
-              <span className="material-symbols-outlined text-[18px]">arrow_back</span>
-              <span>Contacts</span>
-            </Link>
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-surface-container-lowest shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
-              <span className="h-2 w-2 rounded-full bg-primary"></span>
-              <span className="font-label-sm text-label-sm text-on-surface">Audience &amp; Conversation Explorer</span>
-            </div>
-          </div>
-        </header>
+        <TopNav crumbs={[{ label: "Contacts & Audience", href: "/contacts" }, { label: "Conversation Explorer" }]} />
 
-        <main className="w-full pt-16 bg-surface flex-1">
+        <main className="w-full bg-surface flex-1">
           <div className="flex flex-col w-full h-[calc(100vh-4rem)] overflow-hidden">
             {/* Context bar */}
             <div className="shrink-0 px-6 py-3 bg-surface-container-lowest flex items-center justify-between shadow-[0_1px_3px_rgba(15,23,42,0.03)] z-10">
               <div className="flex items-center gap-3">
-                <span className="font-label-sm text-label-sm text-primary uppercase font-bold tracking-wider">WhatsApp Cloud Engine</span>
-                <span className="text-on-surface-variant font-label-sm">•</span>
                 <span className="font-label-sm text-label-sm text-on-surface-variant">Audience &amp; Live Conversation Explorer</span>
               </div>
               <Link

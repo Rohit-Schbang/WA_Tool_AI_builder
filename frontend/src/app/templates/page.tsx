@@ -4,6 +4,7 @@ import { clearToken, getToken } from "@/lib/auth";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Sidebar } from "@/app/components/Sidebar";
+import { TopNav } from "@/app/components/TopNav";
 
 // Static WhatsApp Message Templates page. All data below is hard-coded to
 // mirror the provided design; there is no backend wiring here.
@@ -44,39 +45,11 @@ export default function TemplatesPage() {
       <Sidebar active="templates" />
 
       {/* Main area */}
-      <div className="pl-72 flex flex-col min-h-screen">
+      <div className="pl-sidebar flex flex-col min-h-screen">
         {/* Header */}
-        <header className="fixed top-0 left-72 right-0 h-16 bg-surface/85 backdrop-blur-xl shadow-[0_1px_8px_rgba(0,0,0,0.04)] z-40 flex items-center justify-between px-space-lg">
-          <div className="flex items-center gap-space-md">
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-surface-container-lowest shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
-              <span className="h-2 w-2 rounded-full bg-primary"></span>
-              <span className="font-label-sm text-label-sm text-on-surface">Meta Cloud Connected</span>
-              <span className="font-label-sm text-label-sm text-on-surface-variant font-normal">• Active</span>
-            </div>
-          </div>
-          <div className="flex items-center gap-space-md">
-            <a className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high font-label-md text-label-md transition-all" href="#">
-              <span className="material-symbols-outlined text-[18px]">help</span>
-              <span>Help / Docs</span>
-            </a>
-            <button aria-label="Notifications" className="relative p-2 rounded-lg text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-all">
-              <span className="material-symbols-outlined text-[20px]">notifications</span>
-              <span className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-secondary-container"></span>
-            </button>
-            <div className="h-6 w-px bg-surface-container-highest"></div>
-            <button onClick={handleLogout} className="flex items-center gap-3 pl-1 group" title="Log out">
-              <div className="flex flex-col text-right">
-                <span className="font-label-md text-label-md text-on-surface font-semibold">Log out</span>
-                <span className="font-label-sm text-label-sm text-on-surface-variant">End session</span>
-              </div>
-              <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center group-hover:opacity-90 transition-opacity">
-                <span className="material-symbols-outlined text-on-primary text-[18px]">logout</span>
-              </div>
-            </button>
-          </div>
-        </header>
+        <TopNav crumbs={[{ label: "Templates" }]} />
 
-        <main className="w-full pt-16 bg-surface flex-1">
+        <main className="w-full bg-surface flex-1">
           <div className="flex flex-col w-full">
             <div className="px-space-xl py-space-lg flex flex-col gap-space-lg max-w-[1440px] mx-auto w-full">
               {/* Breadcrumbs & Meta State Indicator */}

@@ -1,11 +1,12 @@
 "use client"
 
 import { api } from "@/lib/api";
-import { clearToken, getToken } from "@/lib/auth";
+import { getToken } from "@/lib/auth";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Sidebar } from "@/app/components/Sidebar";
+import { TopNav } from "@/app/components/TopNav";
 import { EditableBotName } from "@/app/components/EditableBotName";
 import { dialog } from "@/app/components/Dialog";
 import { downloadJson, journeyFileName, wrapJourneyExport } from "@/lib/exportJourney";
@@ -22,6 +23,8 @@ interface Chatbot {
     name: string;
     isActive: boolean;
     createdAt: string;
+    updatedAt?: string;
+    activeVersionId?: string | null; // set once published
 }
 
 export default function ChatbotsPage() {
@@ -187,11 +190,6 @@ export default function ChatbotsPage() {
         }
     }
 
-    //  ---------------------->>> Logout Re-reouter
-    function handleLogout() {
-        clearToken();
-        router.push("/login");
-    }
 
 
 
@@ -217,55 +215,75 @@ export default function ChatbotsPage() {
         })
     }, [bots, search, filter])
 
+    // ---------------------->>> Table pagination (client-side, real data only)
+    const [pageSize, setPageSize] = useState(20)
+    const [page, setPage] = useState(1)
+    const pageCount = Math.max(1, Math.ceil(visibleBots.length / pageSize))
+    const currentPage = Math.min(page, pageCount)
+    const pageBots = visibleBots.slice((currentPage - 1) * pageSize, currentPage * pageSize)
+    const firstRow = visibleBots.length ? (currentPage - 1) * pageSize + 1 : 0
+    const lastRow = Math.min(currentPage * pageSize, visibleBots.length)
+    // Back to page 1 whenever the search / filter / page size changes.
+    useEffect(() => { setPage(1) }, [search, filter, pageSize])
+
+    // "New Chatbot" in the header focuses the quick launcher input.
+    const newNameRef = useRef<HTMLInputElement>(null)
+
+
     return (
-        <div className="bg-surface font-sans text-on-surface antialiased min-h-screen">
-            {/* Sidebar */}
+        <div className="min-h-screen bg-slate-50 dark:bg-slate-950 font-sans text-slate-800 dark:text-slate-100 antialiased">
+            {/* Shared workspace sidebar */}
             <Sidebar active="workflows" />
 
-            {/* Main area */}
-            <div className="pl-72 flex flex-col min-h-screen">
-                {/* Header */}
-                <header className="fixed top-0 left-72 right-0 h-16 bg-surface/85 backdrop-blur-xl shadow-[0_1px_8px_rgba(0,0,0,0.04)] z-40 flex items-center justify-between px-space-lg">
-                    <div />
-                    <div className="flex items-center gap-space-md">
-                        <button onClick={handleLogout} className="flex items-center gap-3 pl-1 group" title="Log out">
-                            <div className="flex flex-col text-right">
-                                <span className="font-label-md text-label-md text-on-surface font-semibold">Log out</span>
-                                <span className="font-label-sm text-label-sm text-on-surface-variant">End session</span>
-                            </div>
-                            <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center group-hover:opacity-90 transition-opacity">
-                                <span className="material-symbols-outlined text-on-primary text-[18px]">logout</span>
-                            </div>
-                        </button>
-                    </div>
-                </header>
+            <div className="pl-sidebar flex flex-col min-h-screen">
+                {/* ===================== Top navbar ===================== */}
+                <TopNav crumbs={[{ label: "Workflows & Bots" }]} />
 
-                <main className="w-full pt-16 bg-surface flex-1">
-                    <div className="p-space-lg lg:p-space-xl max-w-[1440px] mx-auto w-full flex flex-col gap-space-lg">
-                        {/* 1. Header & welcome */}
-                        <div className="flex flex-col md:flex-row md:items-center justify-between gap-space-md pb-2">
-                            <div className="flex flex-col">
-                                <h1 className="font-headline-xl text-headline-xl text-on-surface tracking-tight">Chatbots</h1>
-                                <p className="font-body-md text-body-md text-on-surface-variant mt-1">
-                                    Create, test, and manage your WhatsApp chatbot flows.
+                <main className="flex-1 px-6 py-8 space-y-6">
+                    {/* ===================== Title + actions ===================== */}
+                    <section className="space-y-4">
+                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                            <div>
+                                <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-50">Chatbots</h1>
+                                <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
+                                    Create, test, and manage your WhatsApp chatbot flows and automated journeys.
                                 </p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setShowImport(true)}
+                                    className="inline-flex items-center gap-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 hover:border-slate-300 shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 transition-all"
+                                >
+                                    <span className="material-symbols-outlined text-[16px] text-slate-500" aria-hidden="true">upload</span>
+                                    Import Flow (JSON)
+                                </button>
+
                             </div>
                         </div>
 
-                        {/* 2. Quick launch */}
-                        <div className="p-space-lg rounded-2xl bg-surface-container-lowest shadow-sm relative overflow-hidden flex flex-col lg:flex-row items-start lg:items-center justify-between gap-space-md">
-                            <div className="flex flex-col gap-2 max-w-xl w-full">
-                                <div className="flex items-center gap-2">
-                                    <span className="material-symbols-outlined text-primary text-[20px]">bolt</span>
-                                    <span className="font-headline-sm text-headline-sm text-on-surface">New chatbot</span>
+                        {/* Quick flow launcher */}
+                        <div className="rounded-xl border border-emerald-100 dark:border-emerald-900/50 bg-gradient-to-r from-emerald-50/80 via-teal-50/40 to-white dark:from-emerald-950/40 dark:via-slate-900 dark:to-slate-900 p-4 shadow-sm">
+                            <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4">
+                                <div className="flex items-center gap-3">
+                                    <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-600 text-white shadow-sm flex-shrink-0" aria-hidden="true">
+                                        <span className="material-symbols-outlined text-[20px]">bolt</span>
+                                    </div>
+                                    <div>
+                                        <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Quick Flow Launcher</h2>
+                                        <p className="text-xs text-slate-500 dark:text-slate-400">Name your chatbot and jump straight into the visual workflow canvas.</p>
+                                    </div>
                                 </div>
-                                <form onSubmit={handleCreate} className="flex items-center gap-2 w-full mt-1">
+                                <form onSubmit={handleCreate} className="flex flex-1 max-w-xl items-center gap-4">
                                     <div className="relative flex-1">
-                                        <span className="material-symbols-outlined absolute left-3 top-2.5 text-on-surface-variant text-[20px]">smart_toy</span>
+                                        <span className="material-symbols-outlined pointer-events-none absolute inset-y-0 left-3 top-1 flex items-center text-[16px] text-slate-400" aria-hidden="true">smart_toy</span>
+                                        <label htmlFor="new-bot-name" className="sr-only">New chatbot name</label>
                                         <input
+                                            id="new-bot-name"
+                                            ref={newNameRef}
                                             value={newName}
                                             onChange={(e) => setNewName(e.target.value)}
-                                            className="w-full h-11 pl-10 pr-4 rounded-xl bg-surface-container-low text-on-surface font-body-md text-body-md placeholder:text-on-surface-variant/60 focus:bg-surface-container-lowest focus:outline-none focus:ring-2 focus:ring-primary/20 transition-all"
+                                            className="w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 ml-1 py-2 pl-9 pr-4 text-xs text-slate-800 dark:text-slate-100 placeholder-slate-400 focus:border-emerald-600 focus:outline-none focus:ring-1 focus:ring-emerald-600 shadow-sm"
                                             placeholder="e.g. Abandoned Cart Recovery Bot"
                                             type="text"
                                         />
@@ -273,226 +291,245 @@ export default function ChatbotsPage() {
                                     <button
                                         type="submit"
                                         disabled={!newName.trim() || isCreating}
-                                        className="h-11 px-5 rounded-xl bg-primary text-on-primary font-label-lg text-label-lg font-semibold inline-flex items-center gap-1.5 hover:bg-primary-container active:scale-[0.99] transition-all whitespace-nowrap shadow-sm disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-primary disabled:active:scale-100"
+                                        className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg bg-emerald-600 dark:bg-emerald-600 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800 dark:hover:bg-emerald-700 shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                                     >
-                                        <span>{isCreating ? "Creating..." : "Create Flow"}</span>
-                                        <span className="material-symbols-outlined text-[18px]">arrow_forward</span>
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => setShowImport(true)}
-                                        className="h-11 px-4 rounded-xl bg-surface-container-high hover:bg-surface-container text-on-surface font-label-lg text-label-lg font-semibold inline-flex items-center gap-1.5 active:scale-[0.99] transition-all whitespace-nowrap"
-                                        title="Create a chatbot from a journey JSON file"
-                                    >
-                                        <span className="material-symbols-outlined text-[18px]">upload_file</span>
-                                        <span>Import</span>
+                                        <span>{isCreating ? "Creating…" : "Create Flow"}</span>
+                                        <span className="material-symbols-outlined text-[14px]" aria-hidden="true">arrow_forward</span>
                                     </button>
                                 </form>
                             </div>
                         </div>
+                    </section>
 
-                        {/* 3. Search + filters */}
-                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-space-sm">
-                            <div className="relative max-w-md w-full">
-                                <span className="material-symbols-outlined absolute left-3.5 top-2.5 text-on-surface-variant text-[18px]">search</span>
-                                <input
-                                    value={search}
-                                    onChange={(e) => setSearch(e.target.value)}
-                                    className="w-full h-10 pl-10 pr-4 rounded-xl bg-surface-container-lowest text-on-surface font-body-md text-body-md placeholder:text-on-surface-variant/50 shadow-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
-                                    placeholder="Search by name or ID..."
-                                    type="text"
-                                />
-                            </div>
-                            <div className="flex items-center gap-2 overflow-x-auto pb-1 sm:pb-0">
-                                <div className="flex items-center p-1 rounded-xl bg-surface-container-low">
-                                    {([
-                                        { key: "all", label: `All (${bots.length})` },
-                                        { key: "active", label: `Active (${activeCount})` },
-                                        { key: "inactive", label: `Inactive (${inactiveCount})` },
-                                    ] as const).map((pill) => (
-                                        <button
-                                            key={pill.key}
-                                            onClick={() => setFilter(pill.key)}
-                                            className={`px-3 py-1.5 rounded-lg font-label-md text-label-md transition-all ${
-                                                filter === pill.key
-                                                    ? "bg-surface-container-lowest text-primary font-semibold shadow-xs"
-                                                    : "text-on-surface-variant hover:text-on-surface"
-                                            }`}
-                                        >
-                                            {pill.label}
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
+                    {/* ===================== Search + status tabs ===================== */}
+                    <section className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-2">
+                        <div className="relative w-full sm:w-80">
+                            <span className="material-symbols-outlined pointer-events-none absolute inset-y-0 left-3 top-1 flex items-center text-[16px] text-slate-400" aria-hidden="true">search</span>
+                            <label htmlFor="bot-search" className="sr-only">Search chatbots</label>
+                            <input
+                                id="bot-search"
+                                value={search}
+                                onChange={(e) => setSearch(e.target.value)}
+                                className="w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 py-2 pl-9 pr-3 text-xs text-slate-800 dark:text-slate-100 placeholder-slate-400 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 shadow-sm"
+                                placeholder="Search by name or ID..."
+                                type="text"
+                            />
                         </div>
-
-                        {error && (
-                            <div className="p-3 rounded-xl bg-error-container text-on-error-container font-label-md text-label-md">{error}</div>
-                        )}
-                        {notice && (
-                            <div role="status" className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 font-label-md text-label-md flex items-start gap-2">
-                                <span className="material-symbols-outlined text-[18px] text-amber-600">info</span>
-                                <span className="flex-1">{notice}</span>
-                                <button type="button" onClick={() => setNotice("")} className="text-amber-700 hover:text-amber-900" aria-label="Dismiss">
-                                    <span className="material-symbols-outlined text-[18px]">close</span>
+                        <div role="tablist" aria-label="Filter by status" className="inline-flex rounded-lg bg-slate-200/60 dark:bg-slate-800 p-1 text-xs font-medium text-slate-600 dark:text-slate-300 self-start sm:self-auto">
+                            {([
+                                { key: "all", label: "All", count: bots.length, countCls: "text-slate-500" },
+                                { key: "active", label: "Active", count: activeCount, countCls: "text-emerald-600 font-semibold" },
+                                { key: "inactive", label: "Inactive", count: inactiveCount, countCls: "text-slate-500" },
+                            ] as const).map((t) => (
+                                <button
+                                    key={t.key}
+                                    type="button"
+                                    role="tab"
+                                    aria-selected={filter === t.key}
+                                    onClick={() => setFilter(t.key)}
+                                    className={`rounded-md px-3 py-1 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 ${filter === t.key
+                                            ? "bg-white dark:bg-slate-900 font-semibold text-slate-900 dark:text-slate-100 shadow-sm"
+                                            : "hover:text-slate-900 dark:hover:text-slate-100"
+                                        }`}
+                                >
+                                    {t.label} <span className={`ml-1 text-[11px] ${t.countCls}`}>({t.count})</span>
                                 </button>
-                            </div>
-                        )}
+                            ))}
+                        </div>
+                    </section>
 
-                        {/* 4. Bot cards grid */}
+                    {error && (
+                        <div role="alert" className="p-3 rounded-lg border border-rose-200 bg-rose-50 dark:bg-rose-950/40 dark:border-rose-900 text-rose-700 dark:text-rose-300 text-xs font-medium">{error}</div>
+                    )}
+                    {notice && (
+                        <div role="status" className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 text-xs font-medium flex items-start gap-2">
+                            <span className="material-symbols-outlined text-[18px] text-amber-600" aria-hidden="true">info</span>
+                            <span className="flex-1">{notice}</span>
+                            <button type="button" onClick={() => setNotice("")} className="text-amber-700 hover:text-amber-900" aria-label="Dismiss">
+                                <span className="material-symbols-outlined text-[18px]" aria-hidden="true">close</span>
+                            </button>
+                        </div>
+                    )}
+
+                    {/* ===================== Table ===================== */}
+                    <section className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm overflow-hidden">
                         {isLoading ? (
-                            <div className="flex justify-center py-16">
-                                <span className="w-8 h-8 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+                            <div className="flex justify-center py-16" role="status" aria-label="Loading chatbots">
+                                <span className="w-8 h-8 rounded-full border-2 border-emerald-600 border-t-transparent animate-spin" />
                             </div>
                         ) : bots.length === 0 ? (
-                            <div className="p-12 rounded-2xl bg-surface-container-lowest text-center flex flex-col items-center justify-center gap-3">
-                                <div className="w-12 h-12 rounded-full bg-surface-container-high flex items-center justify-center text-on-surface-variant">
-                                    <span className="material-symbols-outlined text-[28px]">smart_toy</span>
-                                </div>
-                                <span className="font-headline-sm text-headline-sm text-on-surface">No chatbots yet</span>
-                                <p className="font-body-md text-body-md text-on-surface-variant max-w-sm">Create your first one using the box above.</p>
-                            </div>
+                            <EmptyState icon="smart_toy" title="No chatbots yet" text="Create your first one with the Quick Flow Launcher above, or import a journey JSON." />
                         ) : visibleBots.length === 0 ? (
-                            <div className="p-12 rounded-2xl bg-surface-container-lowest text-center flex flex-col items-center justify-center gap-3">
-                                <div className="w-12 h-12 rounded-full bg-surface-container-high flex items-center justify-center text-on-surface-variant">
-                                    <span className="material-symbols-outlined text-[28px]">search_off</span>
-                                </div>
-                                <span className="font-headline-sm text-headline-sm text-on-surface">No chatbots match your criteria</span>
-                                <p className="font-body-md text-body-md text-on-surface-variant max-w-sm">Try adjusting your filters or searching for a different keyword.</p>
+                            <EmptyState icon="search_off" title="No chatbots match your search" text="Try a different name or ID, or reset the filters.">
                                 <button
-                                    onClick={() => { setSearch(""); setFilter("all"); }}
-                                    className="mt-2 px-4 py-2 rounded-lg bg-surface-container-high hover:bg-surface-container text-on-surface font-label-md text-label-md font-semibold transition-all"
+                                    type="button"
+                                    onClick={() => { setSearch(""); setFilter("all") }}
+                                    className="mt-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50"
                                 >
-                                    Reset Filters
+                                    Reset filters
                                 </button>
-                            </div>
+                            </EmptyState>
                         ) : (
-                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-space-lg">
-                                {visibleBots.map((bot) => (
-                                    <div key={bot.id} className="p-space-lg rounded-2xl bg-surface-container-lowest shadow-sm hover:shadow-md transition-all flex flex-col justify-between gap-space-md group">
-                                        <div className="flex flex-col gap-3">
-                                            {/* Card head */}
-                                            <div className="flex items-start justify-between gap-2">
-                                                <div className="flex items-center gap-3">
-                                                    <div className={`w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 ${bot.isActive ? "bg-primary-fixed/30 text-primary" : "bg-surface-container-high text-on-surface-variant"}`}>
-                                                        <span className="material-symbols-outlined text-[26px]">smart_toy</span>
-                                                    </div>
-                                                    <div className="flex flex-col">
-                                                        <div className="flex items-center gap-2">
-                                                            <EditableBotName
-                                                                as="h2"
-                                                                botId={bot.id}
-                                                                name={bot.name}
-                                                                onClick={() => router.push(`/chatbots/${bot.id}/builder`)}
-                                                                onRenamed={(name) => setBots((bs) => bs.map((b) => (b.id === bot.id ? { ...b, name } : b)))}
-                                                                className="font-headline-sm text-headline-sm text-on-surface font-bold group-hover:text-primary transition-colors"
-                                                                inputClassName="text-base font-bold"
-                                                            />
-                                                            {bot.isActive ? (
-                                                                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-primary-fixed/40 text-on-primary-fixed-variant font-label-sm text-label-sm font-semibold">
-                                                                    <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span>
-                                                                    Active
-                                                                </span>
+                            <>
+                                <div className="overflow-x-auto">
+                                    <table className="min-w-full divide-y divide-slate-200 dark:divide-slate-800 text-left text-xs text-slate-600 dark:text-slate-300">
+                                        <thead className="bg-slate-50/80 dark:bg-slate-800/50 font-semibold uppercase tracking-wider text-[11px] text-slate-500 dark:text-slate-400">
+                                            <tr>
+                                                <th scope="col" className="py-3.5 pl-4 pr-3 sm:pl-6">Bot Name &amp; ID</th>
+                                                <th scope="col" className="px-3 py-3.5">Status</th>
+                                                <th scope="col" className="px-3 py-3.5">Version</th>
+                                                <th scope="col" className="px-3 py-3.5">Created Date</th>
+                                                <th scope="col" className="px-3 py-3.5">Last Modified</th>
+                                                <th scope="col" className="py-3.5 pl-3 pr-4 sm:pr-6 text-center">Actions</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                                            {pageBots.map((bot) => {
+                                                const tone = toneFor(bot.id)
+                                                return (
+                                                    <tr key={bot.id} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors group">
+                                                        {/* Name + id */}
+                                                        <td className="whitespace-nowrap py-4 pl-4 pr-3 sm:pl-6">
+                                                            <div className="flex items-center gap-3">
+                                                                <div className={`flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl ring-1 ${tone}`} aria-hidden="true">
+                                                                    <span className="material-symbols-outlined text-[20px]">smart_toy</span>
+                                                                </div>
+                                                                <div className="flex flex-col min-w-0">
+                                                                    <EditableBotName
+                                                                        botId={bot.id}
+                                                                        name={bot.name}
+                                                                        onClick={() => router.push(`/chatbots/${bot.id}/builder`)}
+                                                                        onRenamed={(name) => setBots((bs) => bs.map((b) => (b.id === bot.id ? { ...b, name } : b)))}
+                                                                        className="font-semibold text-sm text-slate-900 dark:text-slate-100 group-hover:text-emerald-700 dark:group-hover:text-emerald-400 transition-colors cursor-pointer truncate max-w-[22rem]"
+                                                                        inputClassName="text-sm font-semibold"
+                                                                    />
+                                                                    <span className="font-mono text-[11px] text-slate-400 mt-0.5">
+                                                                        ID: <span className="text-slate-600 dark:text-slate-300 font-medium">#{bot.id.slice(0, 8)}</span>
+                                                                    </span>
+                                                                </div>
+                                                            </div>
+                                                        </td>
+
+                                                        {/* Toggle + Live / Paused */}
+                                                        <td className="whitespace-nowrap px-3 py-4">
+                                                            <div className="flex items-center gap-2.5">
+                                                                <label className="relative inline-flex cursor-pointer items-center">
+                                                                    <input
+                                                                        type="checkbox"
+                                                                        className="peer sr-only"
+                                                                        checked={bot.isActive}
+                                                                        onChange={() => handleToggleActive(bot.id, bot.isActive)}
+                                                                        aria-label={`${bot.isActive ? "Deactivate" : "Activate"} ${bot.name}`}
+                                                                    />
+                                                                    <div className="h-5 w-9 rounded-full !bg-slate-200 dark:!bg-slate-700 peer-checked:!bg-emerald-600 peer-focus-visible:ring-2 peer-focus-visible:ring-emerald-500 peer-focus-visible:ring-offset-2 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full" />
+                                                                </label>
+                                                                {bot.isActive ? (
+                                                                    <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 dark:bg-emerald-900/30 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-700 dark:text-emerald-300 ring-1 ring-inset ring-emerald-600/20">
+                                                                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden="true" />
+                                                                        Live
+                                                                    </span>
+                                                                ) : (
+                                                                    <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 dark:bg-slate-800 px-2.5 py-0.5 text-[11px] font-semibold text-slate-600 dark:text-slate-300 ring-1 ring-inset ring-slate-500/20">
+                                                                        <span className="h-1.5 w-1.5 rounded-full bg-slate-400" aria-hidden="true" />
+                                                                        Paused
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                        </td>
+
+                                                        {/* Published or draft only */}
+                                                        <td className="whitespace-nowrap px-3 py-4">
+                                                            {bot.activeVersionId ? (
+                                                                <div className="flex flex-col">
+                                                                    <span className="font-semibold text-emerald-500 dark:text-emerald-300">{bot.isActive ? "Published" : "Turn on to reply"}</span>
+                                                                </div>
                                                             ) : (
-                                                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-surface-container-high text-on-surface-variant font-label-sm text-label-sm font-semibold">
-                                                                    <span className="w-1.5 h-1.5 rounded-full bg-outline"></span>
-                                                                    Inactive
-                                                                </span>
+                                                                <div className="flex flex-col">
+                                                                    <span className="font-semibold text-slate-800 dark:text-slate-100">Draft only</span>
+                                                                    <span className="text-[11px] text-amber-600 font-medium">Publish to go live</span>
+                                                                </div>
                                                             )}
-                                                        </div>
-                                                        <span className="font-body-sm text-body-sm text-on-surface-variant">
-                                                            ID: #{bot.id.slice(0, 8)}
-                                                        </span>
-                                                    </div>
-                                                </div>
-                                                {/* Toggle + actions */}
-                                                <div className="flex items-center gap-2">
-                                                    <label className="relative inline-flex items-center cursor-pointer">
-                                                        <input
-                                                            type="checkbox"
-                                                            className="sr-only peer"
-                                                            checked={bot.isActive}
-                                                            onChange={() => handleToggleActive(bot.id, bot.isActive)}
-                                                        />
-                                                        <div className="w-10 h-6 !bg-slate-300 dark:!bg-slate-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:!bg-teal-600 dark:peer-checked:!bg-teal-400"></div>
-                                                    </label>
-                                                    <button
-                                                        onClick={() => handleRename(bot.id, bot.name)}
-                                                        className="p-1.5 rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-all"
-                                                        title="Rename (or double-click the name)"
-                                                    >
-                                                        <span className="material-symbols-outlined text-[20px]">edit</span>
-                                                    </button>
-                                                </div>
-                                            </div>
+                                                        </td>
 
-                                            {/* Status + created date (real data only) */}
-                                            <div className="grid grid-cols-2 gap-2 pt-1">
-                                                <div className="p-2.5 rounded-xl bg-surface-container-low/70 flex flex-col">
-                                                    <span className="font-label-sm text-label-sm text-on-surface-variant uppercase">Status</span>
-                                                    <span className="font-headline-sm text-headline-sm text-on-surface font-semibold">{bot.isActive ? "Live" : "Paused"}</span>
-                                                </div>
-                                                <div className="p-2.5 rounded-xl bg-surface-container-low/70 flex flex-col">
-                                                    <span className="font-label-sm text-label-sm text-on-surface-variant uppercase">Created</span>
-                                                    <span className="font-headline-sm text-headline-sm text-primary font-semibold">
-                                                        {bot.createdAt ? new Date(bot.createdAt).toLocaleDateString() : "—"}
-                                                    </span>
-                                                </div>
-                                            </div>
-                                        </div>
+                                                        <td className="whitespace-nowrap px-3 py-4 font-medium text-slate-600 dark:text-slate-300">
+                                                            {bot.createdAt ? new Date(bot.createdAt).toLocaleDateString() : "—"}
+                                                        </td>
+                                                        <td className="whitespace-nowrap px-3 py-4 text-slate-500 dark:text-slate-400" title={bot.updatedAt ? new Date(bot.updatedAt).toLocaleString() : undefined}>
+                                                            {relativeTime(bot.updatedAt)}
+                                                        </td>
 
-                                        {/* Action buttons footer */}
-                                        <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
-                                            <div className="flex items-center gap-2">
-                                                <Link
-                                                    href={`/chatbots/${bot.id}/builder`}
-                                                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary text-on-primary font-label-md text-label-md font-semibold hover:bg-primary-container shadow-xs active:scale-[0.98] transition-all"
-                                                >
-                                                    <span className="material-symbols-outlined text-[16px]">account_tree</span>
-                                                    <span>Build Flow</span>
-                                                </Link>
-                                                <Link
-                                                    href={`/chatbots/${bot.id}/conversation`}
-                                                    className="inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-surface-container-high hover:bg-surface-container text-on-surface font-label-md text-label-md font-medium transition-all"
-                                                >
-                                                    <span className="material-symbols-outlined text-[16px]">forum</span>
-                                                    <span>Chats Log</span>
-                                                </Link>
-                                                <Link
-                                                    href={`/chatbots/${bot.id}/analytics`}
-                                                    className="inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-surface-container-high hover:bg-surface-container text-on-surface font-label-md text-label-md font-medium transition-all"
-                                                >
-                                                    <span className="material-symbols-outlined text-[16px]">insights</span>
-                                                    <span>Analytics</span>
-                                                </Link>
-                                            </div>
-                                            <div className="flex items-center gap-1">
-                                                <button
-                                                    onClick={() => handleExport(bot)}
-                                                    disabled={exportingId === bot.id}
-                                                    className="inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-surface-container-high hover:bg-surface-container text-on-surface font-label-md text-label-md font-medium transition-all disabled:opacity-60"
-                                                    title="Export this journey as JSON"
-                                                >
-                                                    <span className="material-symbols-outlined text-[16px]">
-                                                        {exportingId === bot.id ? "progress_activity" : "download"}
-                                                    </span>
-                                                    <span>{exportingId === bot.id ? "Exporting..." : "Export JSON"}</span>
-                                                </button>
-                                                <button
-                                                    onClick={() => handleDelete(bot.id)}
-                                                    className="p-2 rounded-lg text-error hover:bg-error-container/30 transition-all"
-                                                    title="Delete Bot"
-                                                >
-                                                    <span className="material-symbols-outlined text-[18px]">delete</span>
-                                                </button>
-                                            </div>
-                                        </div>
+                                                        {/* Actions */}
+                                                        <td className="whitespace-nowrap py-4 pl-3 pr-4 sm:pr-6 text-right">
+                                                            <div className="flex items-center justify-end gap-1.5">
+                                                                <Link
+                                                                    href={`/chatbots/${bot.id}/builder`}
+                                                                    className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold shadow-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 ${bot.isActive
+                                                                            ? "bg-emerald-600 text-white hover:bg-emerald-700"
+                                                                            : "bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700"
+                                                                        }`}
+                                                                >
+                                                                    <span className="material-symbols-outlined text-[14px]" aria-hidden="true">edit_square</span>
+                                                                    Build Flow
+                                                                </Link>
+                                                                <IconLink href={`/chatbots/${bot.id}/conversation`} icon="forum" label="Chats Log" />
+                                                                <IconLink href={`/chatbots/${bot.id}/analytics`} icon="insights" label="Analytics" />
+                                                                <IconButton
+                                                                    icon={exportingId === bot.id ? "progress_activity" : "download"}
+                                                                    label={exportingId === bot.id ? "Exporting…" : "Export JSON"}
+                                                                    onClick={() => handleExport(bot)}
+                                                                    disabled={exportingId === bot.id}
+                                                                    spin={exportingId === bot.id}
+                                                                />
+                                                                <IconButton icon="edit" label="Rename" onClick={() => handleRename(bot.id, bot.name)} />
+                                                                <IconButton icon="delete" label="Delete Bot" danger onClick={() => handleDelete(bot.id)} />
+                                                            </div>
+                                                        </td>
+                                                    </tr>
+                                                )
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
+
+                                {/* Pagination */}
+                                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-t border-slate-200 dark:border-slate-800 px-4 py-3.5 sm:px-6">
+                                    <p className="text-xs text-slate-500 dark:text-slate-400" aria-live="polite">
+                                        Showing <span className="font-semibold text-slate-900 dark:text-slate-100">{firstRow}</span> to{" "}
+                                        <span className="font-semibold text-slate-900 dark:text-slate-100">{lastRow}</span> of{" "}
+                                        <span className="font-semibold text-slate-900 dark:text-slate-100">{visibleBots.length}</span> chatbots
+                                    </p>
+                                    <div className="flex items-center gap-2">
+                                        <label htmlFor="rows-per-page" className="text-xs text-slate-500 dark:text-slate-400">Rows per page:</label>
+                                        <select
+                                            id="rows-per-page"
+                                            value={pageSize}
+                                            onChange={(e) => setPageSize(Number(e.target.value))}
+                                            className="rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 py-1 pl-2.5 pr-7 text-xs font-semibold text-slate-700 dark:text-slate-200 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer"
+                                        >
+                                            {[20, 40, 60].map((n) => <option key={n} value={n}>{n}</option>)}
+                                        </select>
                                     </div>
-                                ))}
-                            </div>
+                                    <nav aria-label="Pagination" className="inline-flex -space-x-px rounded-md shadow-sm">
+                                        <PageButton onClick={() => setPage(currentPage - 1)} disabled={currentPage <= 1} className="rounded-l-md">
+                                            <span className="material-symbols-outlined text-[16px]" aria-hidden="true">chevron_left</span>
+                                            <span className="ml-1 hidden sm:inline">Previous</span>
+                                        </PageButton>
+                                        {pageList(currentPage, pageCount).map((p, i) =>
+                                            p === "…" ? (
+                                                <span key={`gap-${i}`} className="inline-flex items-center border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-1.5 text-xs text-slate-400">…</span>
+                                            ) : (
+                                                <PageButton key={p} onClick={() => setPage(p)} current={p === currentPage}>{p}</PageButton>
+                                            )
+                                        )}
+                                        <PageButton onClick={() => setPage(currentPage + 1)} disabled={currentPage >= pageCount} className="rounded-r-md">
+                                            <span className="mr-1 hidden sm:inline">Next</span>
+                                            <span className="material-symbols-outlined text-[16px]" aria-hidden="true">chevron_right</span>
+                                        </PageButton>
+                                    </nav>
+                                </div>
+                            </>
                         )}
-
-                    </div>
+                    </section>
                 </main>
             </div>
 
@@ -514,4 +551,105 @@ export default function ChatbotsPage() {
             />
         </div>
     );
+}
+
+// ---------------------------------------------------------------------------
+// Small presentational helpers for the table
+// ---------------------------------------------------------------------------
+
+// A stable accent per bot (from its id) so rows are easy to tell apart.
+const TONES = [
+    "bg-emerald-50 text-emerald-600 ring-emerald-500/20 dark:bg-emerald-900/30 dark:text-emerald-300",
+    "bg-blue-50 text-blue-600 ring-blue-500/20 dark:bg-blue-900/30 dark:text-blue-300",
+    "bg-purple-50 text-purple-600 ring-purple-500/20 dark:bg-purple-900/30 dark:text-purple-300",
+    "bg-amber-50 text-amber-600 ring-amber-500/20 dark:bg-amber-900/30 dark:text-amber-300",
+    "bg-slate-100 text-slate-600 ring-slate-400/20 dark:bg-slate-800 dark:text-slate-300",
+]
+function toneFor(id: string) {
+    let h = 0
+    for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0
+    return TONES[h % TONES.length]
+}
+
+// "Just now", "15 mins ago", "2 hours ago", "Yesterday", "3 days ago", else a date.
+function relativeTime(iso?: string) {
+    if (!iso) return "—"
+    const diff = Date.now() - new Date(iso).getTime()
+    const min = Math.floor(diff / 60_000)
+    if (min < 1) return "Just now"
+    if (min < 60) return `${min} min${min === 1 ? "" : "s"} ago`
+    const hrs = Math.floor(min / 60)
+    if (hrs < 24) return `${hrs} hour${hrs === 1 ? "" : "s"} ago`
+    const days = Math.floor(hrs / 24)
+    if (days === 1) return "Yesterday"
+    if (days < 7) return `${days} days ago`
+    return new Date(iso).toLocaleDateString()
+}
+
+// Page numbers with gaps: 1 … 4 5 6 … 12
+function pageList(current: number, total: number): (number | "…")[] {
+    if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1)
+    const set = new Set([1, total, current - 1, current, current + 1].filter((p) => p >= 1 && p <= total))
+    const sorted = [...set].sort((a, b) => a - b)
+    const out: (number | "…")[] = []
+    sorted.forEach((p, i) => {
+        if (i && p - sorted[i - 1] > 1) out.push("…")
+        out.push(p)
+    })
+    return out
+}
+
+const iconBtn = "inline-flex rounded-md p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 transition-colors disabled:opacity-50"
+
+function IconLink({ href, icon, label }: { href: string; icon: string; label: string }) {
+    return (
+        <Link href={href} className={iconBtn} title={label} aria-label={label}>
+            <span className="material-symbols-outlined text-[18px]" aria-hidden="true">{icon}</span>
+        </Link>
+    )
+}
+
+function IconButton({ icon, label, onClick, danger, disabled, spin }: { icon: string; label: string; onClick: () => void; danger?: boolean; disabled?: boolean; spin?: boolean }) {
+    return (
+        <button
+            type="button"
+            onClick={onClick}
+            disabled={disabled}
+            title={label}
+            aria-label={label}
+            className={`${iconBtn} ${danger ? "hover:!bg-rose-50 hover:!text-rose-600 dark:hover:!bg-rose-950/40" : ""}`}
+        >
+            <span className={`material-symbols-outlined text-[18px] ${spin ? "animate-spin" : ""}`} aria-hidden="true">{icon}</span>
+        </button>
+    )
+}
+
+function PageButton({ children, onClick, disabled, current, className = "" }: { children: React.ReactNode; onClick: () => void; disabled?: boolean; current?: boolean; className?: string }) {
+    return (
+        <button
+            type="button"
+            onClick={onClick}
+            disabled={disabled}
+            aria-current={current ? "page" : undefined}
+            className={`relative inline-flex items-center border px-3 py-1.5 text-xs font-medium focus:z-20 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed ${current
+                    ? "z-10 border-emerald-600 bg-emerald-50 dark:bg-emerald-900/30 font-semibold text-emerald-700 dark:text-emerald-300"
+                    : "border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800"
+                } ${className}`}
+        >
+            {children}
+        </button>
+    )
+}
+
+function EmptyState({ icon, title, text, children }: { icon: string; title: string; text: string; children?: React.ReactNode }) {
+    return (
+        <div className="p-12 text-center flex flex-col items-center justify-center gap-3">
+            <div className="w-12 h-12 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-500" aria-hidden="true">
+                <span className="material-symbols-outlined text-[28px]">{icon}</span>
+            </div>
+            <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">{title}</h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm">{text}</p>
+            {children}
+        </div>
+    )
 }

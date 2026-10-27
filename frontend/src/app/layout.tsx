@@ -22,7 +22,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           id="pf-theme-init"
           strategy="beforeInteractive"
           dangerouslySetInnerHTML={{
-            __html: `(function(){try{var k='pf-theme';var s=localStorage.getItem(k);var d=s==='dark'||(!s&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches);var r=document.documentElement;if(d){r.classList.add('dark');r.setAttribute('data-theme','dark');}else{r.classList.remove('dark');r.setAttribute('data-theme','wa');}}catch(e){}})();`,
+            __html: `(function(){try{var k='pf-theme';var s=localStorage.getItem(k);var d=s==='dark'||(!s&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches);var r=document.documentElement;if(d){r.classList.add('dark');r.setAttribute('data-theme','dark');}else{r.classList.remove('dark');r.setAttribute('data-theme','wa');}if(localStorage.getItem('wa-sidebar')==='collapsed'){r.classList.add('sidebar-collapsed');}}catch(e){}})();`,
           }}
         />
         {/* Ask the Dark Reader extension to leave this app alone. Without this,

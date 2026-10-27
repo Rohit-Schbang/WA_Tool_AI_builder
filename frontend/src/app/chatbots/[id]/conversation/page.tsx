@@ -6,6 +6,7 @@ import Link from "next/link";
 import { api } from "@/lib/api";
 import { getToken } from "@/lib/auth";
 import { Sidebar } from "@/app/components/Sidebar";
+import { TopNav } from "@/app/components/TopNav";
 import { EditableBotName } from "@/app/components/EditableBotName";
 
 interface Conversation {
@@ -153,26 +154,16 @@ export default function ConversationsPage() {
   const selectedVarEntries = Object.entries(selected?.variables ?? {}).filter(([k]) => !k.startsWith("__"));
 
   return (
-    <div className="h-screen bg-[#f8f9ff] text-slate-800 overflow-hidden pl-72">
+    <div className="h-screen bg-[#f8f9ff] text-slate-800 overflow-hidden pl-sidebar">
       {/* Shared workspace sidebar */}
       <Sidebar />
 
       {/* ======================= MAIN CONTENT WRAPPER ======================= */}
       <div className="h-full flex flex-col min-w-0 overflow-hidden">
         {/* Top bar */}
-        <header className="h-16 border-b border-slate-200/80 bg-white/95 backdrop-blur px-6 flex items-center justify-between z-10">
-          <nav className="flex items-center gap-2 text-xs font-medium text-slate-500">
-            <Link href="/chatbots" className="hover:text-slate-800 transition-colors">
-              Workflows &amp; Bots
-            </Link>
-            <span>/</span>
-            <span className="text-slate-700 font-semibold flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-teal-500"></span>
-              {botName || "Conversations"}
-            </span>
-          </nav>
-
-          <div className="flex items-center gap-3">
+        <TopNav
+          crumbs={[{ label: "Workflows & Bots", href: "/chatbots" }, { label: botName || "Conversations" }]}
+          actions={
             <Link
               href={`/chatbots/${chatbotId}/builder`}
               className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-teal-700 hover:bg-teal-800 rounded-lg shadow-sm shadow-teal-700/20 transition-all"
@@ -180,8 +171,8 @@ export default function ConversationsPage() {
               <i className="ph-bold ph-arrow-left" aria-hidden="true"></i>
               Back to Builder
             </Link>
-          </div>
-        </header>
+          }
+        />
 
         {/* Scrollable main */}
         <main className="flex-1 flex flex-col min-h-0 bg-[#f8f9ff] px-6 py-4 overflow-hidden">

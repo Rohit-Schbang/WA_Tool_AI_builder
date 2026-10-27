@@ -6,6 +6,7 @@ import Link from "next/link";
 import { api } from "@/lib/api";
 import { getToken } from "@/lib/auth";
 import { Sidebar } from "@/app/components/Sidebar";
+import { TopNav } from "@/app/components/TopNav";
 
 interface Conversation {
   id: string;
@@ -102,42 +103,34 @@ export default function AnalyticsPage() {
   ];
 
   return (
-    <div className="h-screen bg-[#f8f9ff] text-slate-800 overflow-hidden pl-72">
+    <div className="h-screen bg-[#f8f9ff] text-slate-800 overflow-hidden pl-sidebar">
       {/* Shared workspace sidebar */}
       <Sidebar />
 
       {/* ======================= MAIN CONTENT WRAPPER ======================= */}
       <div className="h-full flex flex-col min-w-0 overflow-hidden">
         {/* Top bar */}
-        <header className="h-16 border-b border-slate-200/80 bg-white/95 backdrop-blur px-6 flex items-center justify-between z-10">
-          <nav className="flex items-center gap-2 text-xs font-medium text-slate-500">
-            <Link href="/chatbots" className="hover:text-slate-800 transition-colors">
-              Workflows &amp; Bots
-            </Link>
-            <span>/</span>
-            <span className="text-slate-700 font-semibold flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-teal-500"></span>
-              Analytics
-            </span>
-          </nav>
-
-          <div className="flex items-center gap-3">
-            <Link
-              href={`/chatbots/${chatbotId}/conversation`}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 rounded-lg shadow-sm transition-all"
-            >
-              <i className="ph ph-chats-circle text-slate-500" aria-hidden="true"></i>
-              Chats Log
-            </Link>
-            <Link
-              href={`/chatbots/${chatbotId}/builder`}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-teal-700 hover:bg-teal-800 rounded-lg shadow-sm shadow-teal-700/20 transition-all"
-            >
-              <i className="ph-bold ph-arrow-left" aria-hidden="true"></i>
-              Back to Builder
-            </Link>
-          </div>
-        </header>
+        <TopNav
+          crumbs={[{ label: "Workflows & Bots", href: "/chatbots" }, { label: "Analytics" }]}
+          actions={
+            <>
+              <Link
+                href={`/chatbots/${chatbotId}/conversation`}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 rounded-lg shadow-sm transition-all"
+              >
+                <i className="ph ph-chats-circle text-slate-500" aria-hidden="true"></i>
+                Chats Log
+              </Link>
+              <Link
+                href={`/chatbots/${chatbotId}/builder`}
+                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-teal-700 hover:bg-teal-800 rounded-lg shadow-sm shadow-teal-700/20 transition-all"
+              >
+                <i className="ph-bold ph-arrow-left" aria-hidden="true"></i>
+                Back to Builder
+              </Link>
+            </>
+          }
+        />
 
         {/* Scrollable content */}
         <main className="flex-1 overflow-y-auto bg-[#f8f9ff] px-6 py-6">

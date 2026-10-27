@@ -9,6 +9,21 @@
 /* Plus Jakarta Sans is a variable font — enable optical sizing everywhere. */
 html {
   font-optical-sizing: auto;
+  /* Width of the shared sidebar. Collapsing it (html.sidebar-collapsed, set
+     by Sidebar.tsx and restored before first paint in layout.tsx) shrinks it
+     to icons only; pages offset their content with .pl-sidebar. */
+  --sidebar-w: 16rem;
+}
+html.sidebar-collapsed {
+  --sidebar-w: 5rem;
+}
+.pl-sidebar {
+  padding-left: var(--sidebar-w);
+  transition: padding-left 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.w-sidebar {
+  width: var(--sidebar-w);
+  transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 /* Floating metric card animations for the Whatsflow auth showcase. */

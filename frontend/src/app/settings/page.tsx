@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Sidebar } from "@/app/components/Sidebar";
+import { TopNav } from "@/app/components/TopNav";
 import { EmbeddedSignup } from "./EmbeddedSignup";
 import { ConnectionHealth } from "./ConnectionHealth";
 import { SecretInput } from "./SecretInput";
@@ -240,27 +241,22 @@ function SettingsPageContent() {
     "w-full h-10 px-3 rounded-lg bg-white text-slate-800 text-sm placeholder:text-slate-400 border border-slate-200 shadow-sm focus:outline-none focus:border-teal-600 focus:ring-1 focus:ring-teal-600 transition-all";
 
   return (
-    <div className="h-screen bg-[#f8f9ff] dark:bg-slate-950 text-slate-800 dark:text-slate-100 overflow-hidden pl-72 transition-colors">
+    <div className="h-screen bg-[#f8f9ff] dark:bg-slate-950 text-slate-800 dark:text-slate-100 overflow-hidden pl-sidebar transition-colors">
       {/* Shared workspace sidebar */}
       <Sidebar />
 
       {/* ======================= MAIN CONTENT WRAPPER ======================= */}
       <div className="h-full flex flex-col min-w-0 overflow-hidden">
         {/* Top bar */}
-        <header className="h-16 border-b border-slate-200/80 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur px-6 flex items-center justify-between z-10">
-          <nav className="flex items-center gap-2 text-xs font-medium text-slate-500">
-            <span className="text-slate-700 font-semibold">Workspace</span>
-            <span>/</span>
-            <span className="text-slate-700 font-semibold">WhatsApp Settings</span>
-          </nav>
-
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-100 text-xs font-medium text-slate-700">
+        <TopNav
+          crumbs={[{ label: "WhatsApp Settings" }]}
+          actions={
+            <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-100 dark:bg-slate-800 text-xs font-medium text-slate-700 dark:text-slate-200">
               <span className={`w-2 h-2 rounded-full ${connected ? "bg-emerald-500" : existing?.status === "ERROR" ? "bg-rose-500" : "bg-slate-400"}`}></span>
-              {loading ? "Checking…" : statusLabel}
+              {loading ? "Checkingâ€¦" : statusLabel}
             </div>
-          </div>
-        </header>
+          }
+        />
 
         {/* Scrollable content */}
         <main className="flex-1 overflow-y-auto bg-[#f8f9ff] dark:bg-slate-950 px-6 py-6">

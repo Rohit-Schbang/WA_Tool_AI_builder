@@ -41,7 +41,9 @@ const DEFAULT_NAME: Record<string, string> = {
 };
 
 const titleOf = (n: FlowNode) =>
-  String(n.data.config?.name ?? "").trim() || `${DEFAULT_NAME[n.data.nodeType] ?? n.data.nodeType} ${n.data.seq ?? ""}`.trim();
+  n.data.nodeType === "START"
+    ? "Start"
+    : String(n.data.config?.name ?? "").trim() || `${DEFAULT_NAME[n.data.nodeType] ?? n.data.nodeType} ${n.data.seq ?? ""}`.trim();
 
 // The text a block shows in the list (first user-facing line).
 function previewOf(n: FlowNode): string {

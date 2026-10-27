@@ -57,8 +57,19 @@ export function WorkFlowNode({ id, data, selected }: NodeProps) {
     const config = data.config ?? {};
 
     const style = STYLE[nodeType] ?? { icon: "●", accent: "bg-gray-400", ring: "border-gray-200", chip: "text-gray-600" };
-    const defaultName = `${TITLE[nodeType] ?? nodeType} ${seq}`;
-    const title = config.name?.trim() || defaultName;
+    // START is the one entry block: always just "Start" (no serial number).
+    // An old saved name of "Start 0" is treated as the default too.
+    const defaultName = nodeType === "START" ? "Start" : `${TITLE[nodeType] ?? nodeType} ${seq}`;
+    const savedName = config.name?.trim();
+    const title = nodeType === "START" && (!savedName || /^start\s*0$/i.test(savedName)) ? "Start" : savedName || defaultName;
+
+    // START: the trigger keywords that begin this journey.
+    const startKeywords: string[] =
+        nodeType === "START" && Array.isArray(config.keywords)
+            ? config.keywords.map((k: unknown) => String(k ?? "").trim()).filter(Boolean)
+            : [];
+    const matchLabel =
+        config.matchType === "exact" ? "Exact match" : config.matchType === "starts_with" ? "Starts with" : "Contains";
 
     let preview = "";
     if (nodeType === "SEND_MESSAGE") preview = config.text || "No message";
@@ -154,6 +165,28 @@ export function WorkFlowNode({ id, data, selected }: NodeProps) {
             {/* Body */}
             <div className="px-3 py-2">
                 {preview && <div className="text-xs text-gray-600 line-clamp-2">{preview}</div>}
+
+                {isStart && (
+                    <div className="flex flex-col gap-1.5">
+                        <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+                            Trigger keywords{startKeywords.length > 0 && <span className="normal-case font-normal tracking-normal"> · {matchLabel}</span>}
+                        </div>
+                        {startKeywords.length > 0 ? (
+                            <ul className="flex flex-wrap gap-1" aria-label="Trigger keywords">
+                                {startKeywords.slice(0, 8).map((k, i) => (
+                                    <li key={`${k}-${i}`} className="px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-[11px] font-medium max-w-[200px] truncate" title={k}>
+                                        {k}
+                                    </li>
+                                ))}
+                                {startKeywords.length > 8 && (
+                                    <li className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 text-[11px]">+{startKeywords.length - 8} more</li>
+                                )}
+                            </ul>
+                        ) : (
+                            <div className="text-xs text-amber-700">No keywords: starts on any message</div>
+                        )}
+                    </div>
+                )}
 
                 {nodeType === "API_REQUEST" && (
                     !api || api.missing ? (

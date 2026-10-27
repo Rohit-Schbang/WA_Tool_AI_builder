@@ -1293,6 +1293,7 @@ function BuilderInner() {
 
   // ---------------------- DERIVED: node display name helper ----------------------
   const nodeName = useCallback((n: Node) => {
+    if (n.data.nodeType === "START") return "Start";
     return n.data.config?.name?.trim() || `${TYPE_LABEL[n.data.nodeType] ?? n.data.nodeType} ${n.data.seq}`;
   }, []);
 
@@ -1520,7 +1521,7 @@ function BuilderInner() {
     const rawNodes: any[] = def.nodes ?? [];
     const rawEdges: any[] = def.edges ?? [];
     const nameOf = (n: any) =>
-      n?.config?.name?.trim() || `${TYPE_LABEL[n?.nodeType] ?? n?.nodeType} ${n?.seq ?? ""}`.trim();
+      n?.nodeType === "START" ? "Start" : n?.config?.name?.trim() || `${TYPE_LABEL[n?.nodeType] ?? n?.nodeType} ${n?.seq ?? ""}`.trim();
     const nameById: Record<string, string> = {};
     rawNodes.forEach((n) => { nameById[n.id] = nameOf(n); });
 
